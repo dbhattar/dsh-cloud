@@ -1,0 +1,5 @@
+localhost {
+	tls internal
+	# Caddy preserves Host and forwards WebSocket upgrades by default.
+	reverse_proxy sandbox:3080
+}

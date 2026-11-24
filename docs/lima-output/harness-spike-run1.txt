@@ -1,0 +1,27 @@
+==> building dsh-sandbox:spike in the VM
+
+=================== runtime: runc
+-- boot (waiting up to 60s for the launch token)
+dsh booted (launch token printed)
+-- kernel seen by the container
+Linux 7.0.0-34-generic
+-- sandbox primitives (as the dsh user)
+bwrap: not installed in image
+unshare: unshare failed: Operation not permitted
+user namespaces: DENIED
+CapEff:	0000000000000000
+NoNewPrivs:	1
+Seccomp:	2
+Seccomp_filters:	1
+
+=================== runtime: runsc
+-- boot (waiting up to 60s for the launch token)
+dsh booted (launch token printed)
+-- kernel seen by the container
+Linux 4.19.0-gvisor
+-- sandbox primitives (as the dsh user)
+bwrap: not installed in image
+user namespaces: OK
+CapEff:	0000000000000000
+NoNewPrivs:	1
+Seccomp:	0

@@ -1,0 +1,22 @@
+# gateway
+
+Control plane (phase 2). Zero npm dependencies at runtime; Node >= 24 (`node:sqlite`).
+
+Pages (sign in, feedback, launching, app shell) are a React + TypeScript + CSS-modules app in `web/`, built with Vite on the deepseek-harness `--dsw-*` design tokens (vendored in `web/src/styles`; refresh with `npm run sync-tokens`). Build before running from source: `cd web && npm ci && npm run build`. The Dockerfile does this in a build stage.
+
+- **Auth:** email + password (scrypt), opaque session cookie `gw_session` (HttpOnly, SameSite=Lax), login/signup rate limits, Origin check on POSTs and WebSocket upgrades. Sign-up needs a single-use invite code (`scripts/invite.sh create`) unless `ALLOW_SIGNUP=true`; every attempt counts toward the per-address rate limit, so codes cannot be guessed quickly.
+- **Lifecycle:** one container `dsh-sbx-<userId>` per user with volumes `dsh-data-<id>` (`$DSH_HOME`) and `dsh-ws-<id>` (workspace). Created on first visit, restarted on demand, stopped after `IDLE_SECONDS` without traffic or open WebSockets. The gateway has no Docker access: it asks [sandbox-runner](../runner/README.md) to create, start, stop and remove containers (limits, dropped capabilities and `no-new-privileges` are applied there).
+- **Proxy:** reads the sandbox's launch token from its logs, exchanges it for the sandbox auth cookie, and injects that cookie on every proxied HTTP request and WebSocket upgrade. The sandbox's `Set-Cookie` is stripped, so browsers only ever hold `gw_session`. Gateway routes live under `/gw/*`; everything else goes to the sandbox.
+- **Limits (D1, D2):** `MAX_RUNNING_SANDBOXES` caps concurrent sandboxes (starts are serialised; when full, the longest-idle sandbox with no open sockets and at least `EVICT_AFTER_IDLE_SECONDS` of idle time is stopped, otherwise the start fails with "at capacity"); `MAX_RUN_SECONDS` stops a sandbox after continuous run time; `MAX_DISK_MB` stops a user whose two volumes exceed the limit (checked every `DISK_CHECK_SECONDS` through the runner's `/v1/usage`). A sandbox stopped by a limit is held: an open browser tab does not restart it, only the launching page's explicit start does. Compose defaults: 20, 28800 and 2048; the code defaults are all 0 (off). Disk is checked, not enforced between checks.
+- **Audit log (E1):** the `audit` table and `audit {json}` lines on stdout record sign-ups, sign-ins and failures, logouts, sandbox create/recreate/start/stop/evict/refuse and token issue; never passwords, tokens, invite codes or content. Read it with `scripts/audit.sh`; `AUDIT_RETENTION_DAYS` (90) purges old rows.
+- **Config (env):** `PUBLIC_URL`, `RUNNER_URL` and `RUNNER_SECRET` (all required), `DATA_DIR`, `IDLE_SECONDS`, `REAP_INTERVAL_SECONDS`, `START_TIMEOUT_SECONDS`, `SESSION_TTL_SECONDS`, `LLM_ADMIN_SOCKET` (setting it enables metering), `LLM_ADMIN_SECRET`, `ALLOW_SIGNUP`, `MAX_RUNNING_SANDBOXES`, `EVICT_AFTER_IDLE_SECONDS`, `MAX_RUN_SECONDS`, `MAX_DISK_MB`, `DISK_CHECK_SECONDS`, `AUDIT_RETENTION_DAYS`. Image, network, limits and the model default are `sandbox-runner` settings.
+- **Model access:** the gateway never sees the provider key. On creating a sandbox it asks llm-proxy for a per-user token (`LLM_PROXY_TOKEN`, with `LLM_BASE_URL` pointing at the proxy) and passes only that. Containers created before metering (no `dsh-cloud.llm` label) are replaced on their next start, since their env may hold the old key; volumes are kept. `/gw/api/usage` returns the signed-in user's token usage, which the app shell shows. To cut off a user, revoke the token (`DELETE /admin/tokens/:id` on the proxy); to restore access, remove the container (`docker rm dsh-sbx-<id>`) and the next visit creates one with a new token.
+
+Run: `docker compose -f infra/docker-compose.gateway.yml up -d --build`, then open https://localhost/.
+
+## Known gaps
+- The harness's own "Sign-in" (`deepseek-account` provider) is unused and is hidden unless `SHOW_HARNESS_SIGN_IN=true`.
+- No admin UI, password reset, email verification or account deletion; invite codes are the only signup control. Single gateway instance (state in SQLite + Docker); rate limits and idle timers are in memory and reset on restart.
+- Disk limits are checked every few minutes, not enforced by the filesystem, and a user can restart after a disk stop and fill the disk again.
+- The audit trail lives in the same database as the accounts, so it is not tamper-evident; ship the stdout lines to an external store if you need that.
+- The gateway reads the sandbox's launch token from its container logs.

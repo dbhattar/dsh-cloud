@@ -1,0 +1,46 @@
+/* Mirrors ui-primitives Button / Input metrics (36px controls, md radius, 0.5px outlines). */
+.button {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 36px;
+  padding: 0 14px;
+  border: none;
+  border-radius: var(--dsw-radius-md);
+  font: inherit;
+  cursor: pointer;
+  color: var(--dsw-alias-label-primary);
+  background: transparent;
+}
+.button:disabled { cursor: not-allowed; opacity: 0.4; }
+.primary { background: var(--dsw-alias-button-primary-fill); color: var(--dsw-alias-label-primary-foreground); }
+.outline { box-shadow: inset 0 0 0 0.5px var(--dsw-alias-border-l3); }
+.sm { height: 28px; font-size: 12px; padding: 0 10px; border-radius: var(--dsw-radius-sm); }
+
+@media (hover: hover) {
+  .primary:hover:not(:disabled) { background: var(--dsw-alias-button-primary-hover); }
+  .outline:hover:not(:disabled), .ghost:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover); }
+}
+
+.field { display: grid; gap: 4px; }
+.label { font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary); }
+
+.input {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 36px;
+  padding: 7px 10px;
+  border: 0.5px solid var(--dsw-alias-border-l4);
+  border-radius: var(--dsw-radius-md);
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+}
+.input::placeholder { color: var(--dsw-alias-label-tertiary); }
+.input:focus { outline: none; border-color: var(--dsw-alias-state-business-primary); }
+textarea.input { resize: vertical; }
+
+@media (pointer: coarse) { .input { font-size: 16px; } }
+
+.error { margin: 0 0 12px; color: var(--dsw-alias-state-error-primary); }

@@ -1,0 +1,77 @@
+# Runs on every push and pull request. Everything here is fast and needs no secrets: unit suites, pin and syntax
+# checks, compose validation, and a build of each service image. The Docker acceptance suites (tests/phase*) need a
+# Linux host with gVisor and the built harness, so they are a manual job (workflow_dispatch) on a runner you provide.
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  unit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.22.3 # same as the pinned base image
+          cache: npm
+          cache-dependency-path: gateway/web/package-lock.json
+      - name: Build the gateway pages (the gateway tests render them)
+        working-directory: gateway/web
+        run: npm ci && npm run build
+      - name: Unit suites
+        run: tests/run.sh unit
+
+  checks:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Base images are pinned by digest
+        run: scripts/pin-images.sh --check
+      - name: Harness lock file is present and well formed
+        run: |
+          grep -Eq '^commit=[0-9a-f]{40}$' sandbox/harness.lock
+          grep -Eq '^source_hash=[0-9a-f]{64}$' sandbox/harness.lock
+          grep -Eq '^version=.+' sandbox/harness.lock
+      - name: Shell scripts parse
+        run: for f in scripts/*.sh scripts/lima/*.sh sandbox/entrypoint.sh tests/run.sh; do sh -n "$f" || exit 1; done
+      - name: Compose files are valid
+        env:
+          RUNNER_SECRET: ci-runner-secret-0123456789
+          LLM_ADMIN_SECRET: ci-llm-admin-secret-0123456789
+        run: docker compose -f infra/docker-compose.gateway.yml config --quiet
+
+  images:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Build the service images (the sandbox image needs the harness build and is not built here)
+        run: |
+          for svc in gateway runner llm-proxy egress-proxy; do
+            docker build -t "dshcloud-ci-$svc" "$svc"
+          done
+
+  acceptance:
+    # Manual: needs a Linux host with Docker and gVisor (runsc) registered, and a built harness. Point it at a
+    # self-hosted runner labelled `gvisor`. See docs/lima-setup.md for what such a host needs.
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: [self-hosted, gvisor]
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Build the harness from the locked checkout
+        run: scripts/build-harness.sh --locked
+      - name: Phase 2 to 4 suites under gVisor
+        env:
+          SANDBOX_RUNTIME: runsc
+          DSH_TESTS_ALLOW_DESTRUCTIVE: "1" # the runner is dedicated; the suites delete their own stack's data
+        run: tests/run.sh phase2 && tests/run.sh phase3 && tests/run.sh phase4

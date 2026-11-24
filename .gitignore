@@ -1,0 +1,13 @@
+node_modules/
+.env
+.env.*
+!.env.example
+dist/
+*.log
+.DS_Store
+
+# Staged copy of the local deepseek-harness for the image build (scripts/stage-harness.sh)
+sandbox/.harness-src/
+sandbox/.harness-dist/
+*.code-workspace
+backups/

@@ -1,0 +1,120 @@
+# Stack: Caddy (TLS) -> gateway -> sandbox-runner -> per-user sandbox containers.
+# Only sandbox-runner mounts the Docker socket. Services share the compose `default` network; sandboxes
+# are never on it (each gets its own internal network from sandbox-runner), so they cannot reach the runner.
+name: dshcloud
+services:
+  sandbox-image:
+    build: ../sandbox
+    image: dsh-sandbox:latest
+    entrypoint: ["true"] # build only; real sandboxes are created by sandbox-runner
+    restart: "no"
+  gateway:
+    build: ../gateway
+    depends_on:
+      sandbox-image:
+        condition: service_completed_successfully
+      llm-proxy:
+        condition: service_healthy
+      sandbox-runner:
+        condition: service_healthy
+      egress-proxy:
+        condition: service_healthy
+    labels:
+      dsh-cloud.role: gateway # sandbox-runner attaches it to every user network
+    environment:
+      PUBLIC_URL: https://localhost/
+      RUNNER_URL: http://sandbox-runner:8090
+      RUNNER_SECRET: ${RUNNER_SECRET:?set RUNNER_SECRET in .env (see .env.example)}
+      IDLE_SECONDS: ${IDLE_SECONDS:-1800}
+      REAP_INTERVAL_SECONDS: ${REAP_INTERVAL_SECONDS:-30}
+      # Sign-up needs an invite code (scripts/invite.sh) unless ALLOW_SIGNUP=true.
+      ALLOW_SIGNUP: ${ALLOW_SIGNUP:-false}
+      MAX_RUNNING_SANDBOXES: ${MAX_RUNNING_SANDBOXES:-20} # 0 = unlimited
+      MAX_RUN_SECONDS: ${MAX_RUN_SECONDS:-28800} # continuous run time per sandbox; 0 = unlimited
+      MAX_DISK_MB: ${MAX_DISK_MB:-2048} # per user, both volumes; 0 = unlimited
+      DISK_CHECK_SECONDS: ${DISK_CHECK_SECONDS:-300}
+      AUDIT_RETENTION_DAYS: ${AUDIT_RETENTION_DAYS:-90} # audit rows kept this long; 0 = forever
+      EVICT_AFTER_IDLE_SECONDS: ${EVICT_AFTER_IDLE_SECONDS:-300} # when full, sandboxes idle this long may be stopped for a newcomer
+      LLM_ADMIN_SOCKET: /run/llm-admin/admin.sock
+      LLM_ADMIN_SECRET: ${LLM_ADMIN_SECRET:?set LLM_ADMIN_SECRET in .env (see .env.example)}
+    volumes:
+      - gateway-data:/data
+      - llm-admin:/run/llm-admin # admin socket of llm-proxy; mounted by nothing else
+    expose:
+      - "8080"
+  # The only holder of the Docker socket. Builds every sandbox container spec itself from a user id
+  # and token; reachable only by services on the compose network (never by sandboxes).
+  sandbox-runner:
+    build: ../runner
+    depends_on:
+      sandbox-image:
+        condition: service_completed_successfully
+    environment:
+      PUBLIC_URL: https://localhost/
+      RUNNER_SECRET: ${RUNNER_SECRET:?set RUNNER_SECRET in .env (see .env.example)}
+      SANDBOX_IMAGE: dsh-sandbox:latest
+      # OCI runtime for user sandboxes: runc by default; runsc (gVisor) once registered with the Docker daemon.
+      SANDBOX_RUNTIME: ${SANDBOX_RUNTIME:-runc}
+      LLM_PROXY_URL: http://llm-proxy:8081
+      # Web access for sandboxes only through egress-proxy, which the runner attaches to every user network.
+      SHARED_ROLES: gateway,llm-proxy,egress-proxy
+      EGRESS_PROXY_URL: http://egress-proxy:3128
+      SHOW_HARNESS_SIGN_IN: ${SHOW_HARNESS_SIGN_IN:-false}
+      DEFAULT_MODEL: ${DEFAULT_MODEL:-openrouter/free}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    expose:
+      - "8090"
+  # Holds the real provider key. No published port. Sandboxes reach its /v1 API over their user network
+  # with per-user tokens; the admin API is a unix socket on the llm-admin volume, shared only with the
+  # gateway (and still needs LLM_ADMIN_SECRET).
+  llm-proxy:
+    build: ../llm-proxy
+    labels:
+      dsh-cloud.role: llm-proxy # sandbox-runner attaches it to every user network
+    environment:
+      UPSTREAM_BASE_URL: ${UPSTREAM_BASE_URL:-${LLM_BASE_URL:-https://openrouter.ai/api/v1}}
+      # OPENROUTER_API_KEY / LLM_BASE_URL are accepted for existing .env files.
+      UPSTREAM_API_KEY: ${UPSTREAM_API_KEY:-${OPENROUTER_API_KEY:-}}
+      ADMIN_SECRET: ${LLM_ADMIN_SECRET:?set LLM_ADMIN_SECRET in .env (see .env.example)}
+      ALLOWED_MODELS: ${ALLOWED_MODELS:-${DEFAULT_MODEL:-openrouter/free}}
+      DAILY_TOKEN_QUOTA: ${DAILY_TOKEN_QUOTA:-500000}
+      MONTHLY_TOKEN_QUOTA: ${MONTHLY_TOKEN_QUOTA:-5000000}
+      RATE_LIMIT_PER_MINUTE: ${RATE_LIMIT_PER_MINUTE:-60}
+      MAX_CONCURRENT: ${MAX_CONCURRENT:-4}
+      GLOBAL_DAILY_TOKEN_BUDGET: ${GLOBAL_DAILY_TOKEN_BUDGET:-5000000} # all users together per UTC day; 0 = unlimited
+      ADMIN_SOCKET: /run/llm-admin/admin.sock
+    volumes:
+      - llm-proxy-data:/data
+      - llm-admin:/run/llm-admin
+    expose:
+      - "8081"
+  # The only path out of a user network. On the compose network (which has internet) and, via the runner,
+  # on every user network. Refuses private, loopback, link-local and metadata destinations; logs every request.
+  egress-proxy:
+    build: ../egress-proxy
+    labels:
+      dsh-cloud.role: egress-proxy # sandbox-runner attaches it to every user network
+    environment:
+      ALLOWED_PORTS: ${EGRESS_ALLOWED_PORTS:-80,443}
+    expose:
+      - "3128"
+  proxy:
+    image: caddy:2.11.9@sha256:4851e54a46b206517c574821bb5cc67f170d2156041e9fbc4c9193b45e84a75b
+    ports:
+      - "443:443"
+    volumes:
+      - ./Caddyfile.gateway:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+    depends_on:
+      - gateway
+networks:
+  # Caddy <-> gateway <-> llm-proxy. Sandboxes are not on it: each gets an internal network
+  # `dsh-net-<id>` from sandbox-runner, shared only with the gateway and llm-proxy.
+  default:
+    name: dsh-sandboxes
+volumes:
+  gateway-data:
+  llm-proxy-data:
+  llm-admin:
+  caddy-data:

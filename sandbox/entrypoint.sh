@@ -1,0 +1,54 @@
+#!/bin/sh
+# Starts dsh on the container's own IP (dsh rejects 0.0.0.0) and advertises the
+# browser-facing URL. DSH_PUBLIC_URL and DSH_TRUSTED_HOST are required.
+set -eu
+: "${DSH_PUBLIC_URL:?DSH_PUBLIC_URL is required}"
+: "${DSH_TRUSTED_HOST:?DSH_TRUSTED_HOST is required}"
+IP="$(hostname -i | awk '{print $1}')"
+
+# Runtime config patch. Feedback opens the gateway's own form instead of the
+# upstream questionnaire; DSH_SHOW_SIGN_IN=true restores the "Sign in" menu item; DSH_PUBLIC_URL ends with "/".
+PATCH=/tmp/dsh-cloud-patch.yml
+{
+  echo "- id: ui-settings-account"
+  echo "  config: { contactFormUrl: \"${DSH_PUBLIC_URL%/}/gw/feedback\", showSignIn: ${DSH_SHOW_SIGN_IN:-false} }"
+} > "$PATCH"
+# Harness policy (phase 4 F1, docs/research-harness-policy.md). Every session starts confined to the workspace
+# with approval prompts on, and users can only pick the presets listed here: no danger-full-access. A patch
+# replaces a row's whole config, so the workspace root is restated (the default would be the process cwd).
+# The container (gVisor, read-only root, internal network) is the real boundary; this limits what the agent
+# can do to the user's own /workspace and /data/dsh, and what a prompt-injected page can steer it into.
+{
+  echo "- id: sandbox-policy"
+  echo "  config: { mode: workspace-write, workspaceRoot: /workspace }"
+  echo "- id: approval"
+  echo "  config: { policy: ask }"
+  echo "- id: permission"
+  echo "  config:"
+  echo "    presets:"
+  echo "      read-only: { sandbox: read-only, approval: ask }"
+  echo "      workspace-write: { sandbox: workspace-write, approval: ask }"
+} >> "$PATCH"
+# Model routing: the harness talks to llm-proxy (LLM_BASE_URL) with this user's token (LLM_PROXY_TOKEN).
+# The real provider key is never present in the sandbox.
+if [ -n "${LLM_PROXY_TOKEN:-}" ] && [ -n "${LLM_BASE_URL:-}" ]; then
+  MODEL="${DSH_DEFAULT_MODEL:-openrouter/free}"
+  {
+    echo "- id: agent-default-model"
+    echo "  config: { provider: openrouter, model: \"$MODEL\" }"
+    echo "- id: llm-pi-ai"
+    echo "  config:"
+    echo "    providers:"
+    echo "      openrouter:"
+    echo "        apiKeyEnv: LLM_PROXY_TOKEN"
+    echo "        baseURL: \"$LLM_BASE_URL\""
+    echo "        models:"
+    echo "          - id: \"$MODEL\""
+  } >> "$PATCH"
+fi
+set -- --patch "$PATCH"
+# Launcher options (--patch) must precede app options such as --no-open.
+exec dsh --profile web "$@" --no-open \
+  --host "$IP" --port 3080 \
+  --public-url "$DSH_PUBLIC_URL" \
+  --trusted-host "$DSH_TRUSTED_HOST"

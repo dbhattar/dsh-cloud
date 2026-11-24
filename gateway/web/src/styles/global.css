@@ -1,0 +1,12 @@
+:root { color-scheme: light; }
+body[data-ds-dark-theme] { color-scheme: dark; }
+html, body, #root { height: 100%; }
+body {
+  margin: 0;
+  background: var(--dsw-alias-bg-base);
+  color: var(--dsw-alias-label-primary);
+  font: 14px/22px var(--dsw-font-family);
+  -webkit-font-smoothing: antialiased;
+}
+a { color: var(--dsw-alias-state-business-primary); }
+*:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 2px; }

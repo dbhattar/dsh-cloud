@@ -1,0 +1,11 @@
+# Proposes updates to the pinned base images and actions as pull requests, so pins do not rot.
+version: 2
+updates:
+  - { package-ecosystem: docker, directory: /gateway, schedule: { interval: weekly } }
+  - { package-ecosystem: docker, directory: /runner, schedule: { interval: weekly } }
+  - { package-ecosystem: docker, directory: /llm-proxy, schedule: { interval: weekly } }
+  - { package-ecosystem: docker, directory: /egress-proxy, schedule: { interval: weekly } }
+  - { package-ecosystem: docker, directory: /sandbox, schedule: { interval: weekly } }
+  - { package-ecosystem: docker-compose, directory: /infra, schedule: { interval: weekly } }
+  - { package-ecosystem: github-actions, directory: /, schedule: { interval: weekly } }
+  - { package-ecosystem: npm, directory: /gateway/web, schedule: { interval: weekly } }

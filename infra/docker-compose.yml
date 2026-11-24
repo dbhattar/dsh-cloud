@@ -1,0 +1,24 @@
+services:
+  sandbox:
+    build: ../sandbox
+    environment:
+      DSH_PUBLIC_URL: https://localhost/
+      DSH_TRUSTED_HOST: localhost
+    volumes:
+      - dsh-data:/data/dsh
+      - workspace:/workspace
+    expose:
+      - "3080"
+  proxy:
+    image: caddy:2.11.9@sha256:4851e54a46b206517c574821bb5cc67f170d2156041e9fbc4c9193b45e84a75b
+    ports:
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+    depends_on:
+      - sandbox
+volumes:
+  dsh-data:
+  workspace:
+  caddy-data:
