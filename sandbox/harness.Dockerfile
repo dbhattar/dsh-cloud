@@ -3,7 +3,7 @@
 # Builds the LOCAL deepseek-harness into a self-contained workspace tree (production dependencies only).
 # Not run directly: scripts/build-harness.sh stages the source, builds the `dist` target and exports it to
 # sandbox/.harness-dist/, which sandbox/Dockerfile then copies. Context is sandbox/.harness-src.
-FROM node:24.22.3-bookworm@sha256:9d266751ca3d7fdbe651c878ffd5ad0a42fed49a18c283509267c97f025b7496 AS build
+FROM node:26.13.1-bookworm@sha256:b7087bc4d973034b30854b378ba107f9fab622b47514cb7e2592e41b8bab8d49 AS build
 # Desktop/Electron are workspace members but irrelevant here; skip their binary downloads.
 ENV CI=1 ELECTRON_SKIP_BINARY_DOWNLOAD=1 ELECTRON_SKIP_DOWNLOAD=1 npm_config_audit=false
 RUN corepack enable

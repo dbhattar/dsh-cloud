@@ -1,7 +1,7 @@
 # Sandbox image: the pre-built local deepseek-harness plus the entrypoint. Fast to build.
 # The harness is built separately (and only when needed) by scripts/build-harness.sh,
 # which fills sandbox/.harness-dist/.
-FROM node:24.22.3-slim@sha256:dc26ae92c9fb15cf6b1d63e20f0944b2efe0f115b20e00be48fb23fceb061c54
+FROM node:26.13.1-slim@sha256:e6bedef217677b276c591795e169840edd9096dbf13f29df8ef8d1856b8820bc
 COPY .harness-dist/ /opt/dsh/
 RUN test -f /opt/dsh/apps/cli/lib/bin.js \
  && ln -s /opt/dsh/apps/cli/lib/bin.js /usr/local/bin/dsh && chmod +x /opt/dsh/apps/cli/lib/bin.js
