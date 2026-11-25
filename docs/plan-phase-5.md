@@ -147,6 +147,7 @@ These are gaps in what the product can do. Some come straight from code already 
 32. **Faster cold start** (M): a pool of pre-created sandboxes, a smaller image, warm caches; measure first, since a start is about five seconds in the VM.
 33. **Status and incident communication** (S to M): health checks per sandbox, a status page, and a banner when the model provider is failing, so users can tell "my fault" from "service problem".
 34. **Privacy and data rights** (S to M): retention policy, delete-my-data, export, and a plain statement of what is logged (the audit log already excludes content).
+35. **Two-way chat channels, SMS first** (L, idea only): message the agent from a phone and get answers and approvals back, waking a stopped sandbox. Notes and open questions in [ideas-chat-channels.md](ideas-chat-channels.md); the cheap first step is one-way notices (items 19 and 28).
 
 ## Open decisions
 
