@@ -1,11 +1,32 @@
-# Proposes updates to the pinned base images and actions as pull requests, so pins do not rot.
+# Proposes updates to the pinned base images, actions and gateway page dependencies as pull requests, so pins do not rot.
 version: 2
 updates:
-  - { package-ecosystem: docker, directory: /gateway, schedule: { interval: weekly } }
-  - { package-ecosystem: docker, directory: /runner, schedule: { interval: weekly } }
-  - { package-ecosystem: docker, directory: /llm-proxy, schedule: { interval: weekly } }
-  - { package-ecosystem: docker, directory: /egress-proxy, schedule: { interval: weekly } }
-  - { package-ecosystem: docker, directory: /sandbox, schedule: { interval: weekly } }
-  - { package-ecosystem: docker-compose, directory: /infra, schedule: { interval: weekly } }
-  - { package-ecosystem: github-actions, directory: /, schedule: { interval: weekly } }
-  - { package-ecosystem: npm, directory: /gateway/web, schedule: { interval: weekly } }
+  # One pull request for every Dockerfile and compose file, so the Node base stays the same everywhere
+  # (tests/sandbox/pins.test.mjs requires that). Node major versions are ignored on purpose: moving the runtime is a
+  # deliberate change (Dockerfiles, harness.Dockerfile, the CI node-version, then the suites under gVisor).
+  # When a Node 24.x PR arrives, also change `node-version` in .github/workflows/ci.yml; the pins test fails until it matches.
+  - package-ecosystem: docker
+    directories: [/gateway, /runner, /llm-proxy, /egress-proxy, /sandbox]
+    schedule: { interval: weekly }
+    open-pull-requests-limit: 2
+    ignore:
+      - { dependency-name: node, update-types: ["version-update:semver-major"] }
+    groups:
+      node-base: { patterns: [node] }
+  - package-ecosystem: docker-compose
+    directory: /infra
+    schedule: { interval: weekly }
+    open-pull-requests-limit: 1
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly }
+    open-pull-requests-limit: 2
+  # React, react-dom and their types must move together, and so must Vite and its React plugin (each pair
+  # has a peer dependency on the other); separate pull requests would each fail to install.
+  - package-ecosystem: npm
+    directory: /gateway/web
+    schedule: { interval: weekly }
+    open-pull-requests-limit: 3
+    groups:
+      react: { patterns: [react, react-dom, "@types/react", "@types/react-dom"] }
+      vite: { patterns: [vite, "@vitejs/plugin-react"] }
