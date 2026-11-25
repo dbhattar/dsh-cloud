@@ -168,6 +168,9 @@ export function createGateway({ cfg, store, manager, log = console.log, audit = 
     if (path === '/gw/api/status' && req.method === 'GET') {
       return json(res, 200, manager.status(user.id));
     }
+    if (path === '/gw/api/limits' && req.method === 'GET') {
+      return json(res, 200, await manager.limits(user.id));
+    }
     if (path === '/gw/api/usage' && req.method === 'GET') {
       if (!manager.llm) return json(res, 404, { error: 'metering is not enabled' });
       try {
@@ -186,9 +189,17 @@ export function createGateway({ cfg, store, manager, log = console.log, audit = 
       return json(res, 202, manager.status(user.id));
     }
     if (path === '/gw/api/stop' && req.method === 'POST') {
-      const info = await manager.runner.info(user.id);
-      if (info?.running) await manager.stop(user.id, 'user');
+      // ?hold=1 (the app's Stop button): stay stopped until the user starts it again, instead of waking on the next request.
+      if (new URL(req.url, 'http://x').searchParams.get('hold') === '1') await manager.stopAndHold(user.id);
+      else {
+        const info = await manager.runner.info(user.id);
+        if (info?.running) await manager.stop(user.id, 'user');
+      }
       return json(res, 200, { state: 'stopped' });
+    }
+    if (path === '/gw/api/restart' && req.method === 'POST') {
+      await manager.restart(user.id); // returns once the old container is stopped and the new start is under way
+      return json(res, 202, manager.status(user.id));
     }
     return json(res, 404, { error: 'not found' });
   }
@@ -207,6 +218,7 @@ export function createGateway({ cfg, store, manager, log = console.log, audit = 
       // Top-level browser navigations get the account shell; the harness itself loads in its iframe.
       if (req.method === 'GET' && req.headers['sec-fetch-dest'] === 'document') {
         const src = req.url.startsWith('//') ? '/' : req.url;
+        manager.releaseUserHold?.(user.id); // coming back to the app ends a stop the user asked for
         return send(res, 200, appShellPage({ email: user.email, src }));
       }
       const sb = await manager.ready(user.id);

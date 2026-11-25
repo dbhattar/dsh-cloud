@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { loadConfig } from '../../gateway/src/config.js';
 import { SandboxManager } from '../../gateway/src/sandbox.js';
-import { SandboxProblem, classifyFailure, noticeFor, problemFor, spanText, usageProblem } from '../../gateway/src/states.js';
+import { RUN_WARN_SECONDS, SandboxProblem, classifyFailure, noticeFor, percentOf, problemFor, shapeUsage, spanText, usageProblem, usageWarnings } from '../../gateway/src/states.js';
 
 const base = { PUBLIC_URL: 'https://localhost/', RUNNER_URL: 'http://sandbox-runner:8090', RUNNER_SECRET: 'runner-secret-0123456789' };
 const cfg = loadConfig({ ...base, MAX_RUN_SECONDS: '28800', MAX_DISK_MB: '2048', DISK_CHECK_SECONDS: '300', IDLE_SECONDS: '1800', MAX_BUSY_SECONDS: '7200' });
@@ -20,6 +20,7 @@ const ALL = [
   ['capacity', {}],
   ['stopped_run_time', { maxRunSeconds: 28800 }],
   ['stopped_disk', { usedMb: 3000, limitMb: 2048, checkSeconds: 300 }],
+  ['stopped_user', {}],
   ['start_timeout', {}], ['harness_exited', {}], ['service_unavailable', {}], ['model_unavailable', {}],
   ['sandbox_unreachable', {}], ['start_failed', {}],
   ['quota_day', { used: 500000, limit: 500000, resetsAt: '2026-06-11T00:00:00.000Z' }],
@@ -137,4 +138,75 @@ test('status: limit stops carry their numbers, and an unrequested stop explains 
   assert.equal(m.status(3).notice.code, 'resumed_idle');
   await m.stop(4, 'user');
   assert.equal(m.status(4).notice, null);
+});
+
+// ---- early warnings (P5-3) ----
+const day = (used) => ({ used, limit: 1000, resetsAt: '2026-06-11T00:00:00.000Z' });
+const month = (used) => ({ used, limit: 10000, resetsAt: '2026-07-01T00:00:00.000Z' });
+const MB = 1024 * 1024;
+
+test('percentOf: a share, or null when there is no limit', () => {
+  assert.equal(percentOf(50, 200), 25);
+  assert.equal(percentOf(5, 0), null);
+  assert.equal(percentOf(5, null), null);
+});
+
+test('token warnings: none below 80%, "used N%" from 80%, "almost used" from 95%, left to the problem at 100%', () => {
+  assert.deepEqual(usageWarnings({ tokens: { day: day(790), month: month(100) } }, cfg), []);
+  const high = usageWarnings({ tokens: { day: day(800), month: month(100) } }, cfg);
+  assert.equal(high.length, 1);
+  assert.equal(high[0].code, 'tokens_day_high');
+  assert.equal(high[0].severity, 'warning');
+  assert.match(high[0].title, /You have used 80% of today's model allowance/);
+  assert.match(high[0].message, /800 of 1,000 tokens.*2026-06-11 00:00 UTC.*workspace keeps working/);
+  const crit = usageWarnings({ tokens: { day: day(960), month: month(100) } }, cfg)[0];
+  assert.equal(crit.code, 'tokens_day_critical');
+  assert.equal(crit.severity, 'error');
+  assert.match(crit.title, /almost used today's/);
+  assert.deepEqual(usageWarnings({ tokens: { day: day(1000), month: month(100) } }, cfg), [], 'at the limit it is a problem, not a warning');
+  assert.equal(usageWarnings({ tokens: { day: { used: 5, limit: null, resetsAt: 'x' }, month: month(0) } }, cfg).length, 0, 'no limit, no warning');
+});
+
+test('storage warnings: 80%, 95%, and over the limit (still a warning: the stop happens at the next check)', () => {
+  const at = (usedMb) => usageWarnings({ storage: { usedBytes: usedMb * MB, limitBytes: 100 * MB } }, cfg);
+  assert.deepEqual(at(79), []);
+  assert.equal(at(85)[0].code, 'storage_high');
+  assert.match(at(85)[0].title, /Your storage is 85% full/);
+  assert.equal(at(97)[0].code, 'storage_critical');
+  assert.equal(at(97)[0].severity, 'error');
+  const over = at(130)[0];
+  assert.equal(over.code, 'storage_over');
+  assert.match(over.message, /130 MB of 100 MB.*stopped at the next storage check.*every 5 minutes/);
+  assert.deepEqual(usageWarnings({ storage: { usedBytes: 500 * MB, limitBytes: null } }, cfg), [], 'no limit configured');
+});
+
+test('run-time warning: in the last 15 minutes, urgent in the last five', () => {
+  const run = (left) => usageWarnings({ run: { maxSeconds: 28800, secondsLeft: left } }, cfg);
+  assert.deepEqual(run(RUN_WARN_SECONDS + 60), []);
+  const w = run(12 * 60)[0];
+  assert.equal(w.code, 'run_time_low');
+  assert.equal(w.severity, 'warning');
+  assert.match(w.title, /Your workspace will stop in 12 minutes/);
+  assert.match(w.message, /8 hours at a time.*start it again right away/);
+  assert.equal(run(200)[0].severity, 'error');
+  assert.match(run(30)[0].title, /under a minute/);
+  assert.deepEqual(usageWarnings({ run: { maxSeconds: 28800, secondsLeft: 60 } }, { ...cfg, maxRunSeconds: 0 }), [], 'no run limit configured');
+});
+
+test('warnings are ordered most urgent first and never leak internals', () => {
+  const all = usageWarnings({
+    tokens: { day: day(850), month: month(9900) },
+    storage: { usedBytes: 60 * MB, limitBytes: 100 * MB },
+    run: { maxSeconds: 28800, secondsLeft: 100 },
+  }, cfg);
+  // errors before warnings; among errors, the one closest to its limit first (the run ends in 100 s, the month is at 99%)
+  assert.deepEqual(all.map((w) => w.code), ['run_time_low', 'tokens_month_critical', 'tokens_day_high']);
+  for (const w of all) assert.ok(!/undefined|NaN|null|\[object|docker|runner|llm-proxy|container/i.test(`${w.title} ${w.message}`), w.code);
+});
+
+test('shapeUsage reduces the shared budget to exhausted and resetsAt', () => {
+  const shaped = shapeUsage({ userId: 1, global: { used: 9, limit: 10, exhausted: true, resetsAt: 'r' } });
+  assert.deepEqual(shaped.global, { exhausted: true, resetsAt: 'r' });
+  assert.equal(shapeUsage(null), null);
+  assert.equal(shapeUsage({ userId: 1 }).global, null);
 });

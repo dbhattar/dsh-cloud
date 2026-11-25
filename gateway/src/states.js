@@ -51,6 +51,12 @@ const PROBLEMS = {
     message: `It uses ${number(p.usedMb)} MB of the ${number(p.limitMb ?? cfg.maxDiskMb)} MB you can store, so it was stopped. Start it again and delete files you do not need. Storage is checked about every ${spanText(p.checkSeconds ?? cfg.diskCheckSeconds)} and the workspace is stopped again while it is still over.`,
     action: START,
   }),
+  stopped_user: () => ({
+    severity: 'info',
+    title: 'Your workspace is stopped',
+    message: 'You stopped it. Your files and sessions are saved. Start it again when you want to keep working.',
+    action: START,
+  }),
   start_timeout: () => ({
     severity: 'error',
     title: 'Your workspace is taking too long to start',
@@ -154,4 +160,81 @@ export function usageProblem(usage) {
     return problemFor(usage.blockedBy === 'day' ? 'quota_day' : 'quota_month', { used: w.used, limit: w.limit, resetsAt: w.resetsAt });
   }
   return null;
+}
+
+/** Share of a limit used, in percent (a number), or null when there is no limit. */
+export function percentOf(used, limit) {
+  return limit > 0 ? (used / limit) * 100 : null;
+}
+
+/** Warn this long before the run-time limit stops the workspace. */
+export const RUN_WARN_SECONDS = 15 * 60;
+
+const mb = (bytes) => Math.round(bytes / 1024 / 1024);
+
+/**
+ * Early warnings, before a limit is hit, for the usage panel and the banner: model tokens (day and month), storage, and
+ * time left in this run. Each is { code, severity, title, message, meter, percent }; most urgent first. A meter that has
+ * already reached its limit is not repeated here for tokens (that is a problem, see usageProblem); storage over the limit
+ * is still a warning because the workspace is only stopped at the next check.
+ *
+ * @param {{ tokens?: object|null, storage?: { usedBytes: number, limitBytes: number|null }|null, run?: { secondsLeft: number, maxSeconds: number }|null }} meters
+ * @param {object} cfg gateway config (maxRunSeconds, diskCheckSeconds)
+ */
+export function usageWarnings({ tokens = null, storage = null, run = null } = {}, cfg = {}) {
+  const out = [];
+  if (tokens) {
+    for (const [key, noun] of [['day', "today's"], ['month', "this month's"]]) {
+      const w = tokens[key];
+      const percent = w ? percentOf(w.used, w.limit) : null;
+      if (percent === null || percent < 80 || percent >= 100) continue;
+      const near = percent >= 95;
+      out.push({
+        code: `tokens_${key}_${near ? 'critical' : 'high'}`,
+        severity: near ? 'error' : 'warning',
+        title: near ? `You have almost used ${noun} model allowance` : `You have used ${Math.floor(percent)}% of ${noun} model allowance`,
+        message: `${number(w.used)} of ${number(w.limit)} tokens. Model requests stop at the limit and work again at ${utc(w.resetsAt)}. Your workspace keeps working.`,
+        meter: `tokens_${key}`,
+        percent,
+      });
+    }
+  }
+  if (storage && storage.limitBytes > 0) {
+    const percent = percentOf(storage.usedBytes, storage.limitBytes);
+    if (percent >= 80) {
+      const over = percent >= 100;
+      const near = percent >= 95;
+      const used = number(mb(storage.usedBytes));
+      const limit = number(mb(storage.limitBytes));
+      out.push({
+        code: over ? 'storage_over' : near ? 'storage_critical' : 'storage_high',
+        severity: near ? 'error' : 'warning',
+        title: over ? 'Your storage is over its limit' : near ? 'Your storage is almost full' : `Your storage is ${Math.floor(percent)}% full`,
+        message: over
+          ? `It uses ${used} MB of ${limit} MB, so your workspace will be stopped at the next storage check (about every ${spanText(cfg.diskCheckSeconds ?? 300)}). Delete files you do not need.`
+          : `It uses ${used} MB of ${limit} MB. At the limit your workspace is stopped; delete files you do not need. Storage is checked about every ${spanText(cfg.diskCheckSeconds ?? 300)}.`,
+        meter: 'storage',
+        percent,
+      });
+    }
+  }
+  if (run && cfg.maxRunSeconds && run.secondsLeft <= RUN_WARN_SECONDS) {
+    out.push({
+      code: 'run_time_low',
+      severity: run.secondsLeft <= 300 ? 'error' : 'warning',
+      title: `Your workspace will stop in ${run.secondsLeft < 60 ? 'under a minute' : spanText(run.secondsLeft)}`,
+      message: `A workspace can run for ${spanText(run.maxSeconds)} at a time. Save your work: it will stop then, and you can start it again right away. Your files and sessions are kept.`,
+      meter: 'run',
+      percent: percentOf(run.maxSeconds - run.secondsLeft, run.maxSeconds),
+    });
+  }
+  const rank = { error: 0, warning: 1, info: 2 };
+  return out.sort((a, b) => rank[a.severity] - rank[b.severity] || b.percent - a.percent);
+}
+
+/** The usage payload as users may see it: the shared budget reduced to whether it is spent and when it resets. */
+export function shapeUsage(usage) {
+  if (!usage) return null;
+  const global = usage.global ? { exhausted: usage.global.exhausted, resetsAt: usage.global.resetsAt } : null;
+  return { ...usage, global };
 }

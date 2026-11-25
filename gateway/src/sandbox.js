@@ -1,5 +1,5 @@
 import http from 'node:http';
-import { SandboxProblem, classifyFailure, noticeFor, problemFor } from './states.js';
+import { SandboxProblem, classifyFailure, noticeFor, problemFor, shapeUsage, usageProblem, usageWarnings } from './states.js';
 
 /** Startup stages in order; the launching page renders these labels from /gw/api/status. */
 export const STAGES = [
@@ -36,6 +36,7 @@ export class SandboxManager {
     this.keptBusy = new Set(); // userIds currently being kept alive past the idle limit (so the audit line is written once)
     this.signalWarned = false;
     this.problems = new Map(); // userId -> { code, params } of the last failure or limit stop, for the designed state
+    this.diskCache = { at: 0, byUser: new Map() }; // per-user volume bytes from the runner, refreshed at most once a minute
     this.lastStop = new Map(); // userId -> { by } when a stop the user did not ask for is waiting to be explained on return
   }
 
@@ -322,6 +323,87 @@ export class SandboxManager {
     this.audit.record('sandbox.stop', { userId, by });
     if (noticeFor(by, this.cfg)) this.lastStop.set(userId, { by }); else this.lastStop.delete(userId);
     this.log(`sandbox ${userId} stopped`);
+  }
+
+  /**
+   * Stop the workspace because the user asked, and keep it stopped until they start it again (or visit the app anew):
+   * without the hold, the open page's next request would start it straight back up.
+   */
+  async stopAndHold(userId) {
+    const info = await this.runner.info(userId);
+    if (info?.running) await this.stop(userId, 'user');
+    const message = 'You stopped your workspace.';
+    this.held.set(userId, message);
+    this.problems.set(userId, { code: 'stopped_user', params: {} });
+    this.errors.set(userId, message);
+  }
+
+  /** The user returned to the app: a stop they asked for no longer applies. Limit stops are not released this way. */
+  releaseUserHold(userId) {
+    if (this.problems.get(userId)?.code !== 'stopped_user') return;
+    this.held.delete(userId);
+    this.problems.delete(userId);
+    this.errors.delete(userId);
+  }
+
+  /**
+   * Stop and start again: for a stuck harness. Running commands and an in-progress turn end; files and sessions are kept.
+   * Resolves once the old container is stopped and the new start is under way: { done } settles when it is up. The caller
+   * answers the user at that point, so a page that reloads next finds a start in flight and not a half-stopped container.
+   */
+  async restart(userId) {
+    const info = await this.runner.info(userId);
+    if (info?.running) await this.stop(userId, 'user_restart');
+    this.audit.record('sandbox.restart', { userId });
+    this.held.delete(userId);
+    this.touch(userId);
+    const done = this.ensure(userId, { explicit: true });
+    done.catch(() => {}); // failures are reported through the status
+    return { done };
+  }
+
+  /** The user's volumes in bytes, from a cache of the runner's answer (Docker computes sizes on demand, which is slow). */
+  async #storageBytes(userId) {
+    if (Date.now() - this.diskCache.at > 60_000) {
+      try {
+        this.diskCache = { at: Date.now(), byUser: new Map((await this.runner.diskUsage()).map((u) => [u.userId, u.bytes])) };
+      } catch (e) {
+        this.log(`storage usage: ${e.message}`);
+        this.diskCache = { ...this.diskCache, at: Date.now() - 30_000 }; // try again in 30 s, keep what we had
+      }
+    }
+    return this.diskCache.byUser.get(userId) ?? null;
+  }
+
+  /**
+   * Everything the usage panel shows for one user: model tokens, storage, time left in this run, the workspace state, any
+   * model-access problem, and early warnings. Parts that cannot be known are null rather than guessed.
+   */
+  async limits(userId) {
+    const cfg = this.cfg;
+    let tokens = null;
+    if (this.llm) {
+      try {
+        tokens = shapeUsage(await this.llm.usage(userId));
+      } catch (e) {
+        this.log(`limits: usage lookup failed user=${userId}: ${e.message}`);
+      }
+    }
+    const usedBytes = await this.#storageBytes(userId);
+    const storage = usedBytes === null ? null : { usedBytes, limitBytes: cfg.maxDiskMb ? cfg.maxDiskMb * 1024 * 1024 : null };
+    const startedAt = this.cache.get(userId)?.startedAt;
+    const started = startedAt ? Date.parse(startedAt) : NaN;
+    const run = cfg.maxRunSeconds && Number.isFinite(started)
+      ? { maxSeconds: cfg.maxRunSeconds, secondsLeft: Math.max(0, Math.round(cfg.maxRunSeconds - (Date.now() - started) / 1000)), startedAt }
+      : null;
+    return {
+      workspace: { state: this.state(userId) },
+      tokens,
+      storage,
+      run,
+      problem: usageProblem(tokens),
+      warnings: usageWarnings({ tokens, storage, run }, cfg),
+    };
   }
 
   /** True if the agent in this sandbox looked busy (model call or CPU use) within the last busySignalSeconds. */

@@ -178,12 +178,14 @@ test('/gw/api/usage: requires a session, returns only the caller\'s usage, hides
   }
 });
 
-test('the app shell bundle polls /gw/api/usage and shows the gateway\'s designed state as a banner', async () => {
+test('the app shell bundle polls /gw/api/limits and shows the gateway\'s designed state or warning as a banner', async () => {
   const { readdirSync, readFileSync } = await import('node:fs');
   const dist = new URL('../../gateway/web/dist/', import.meta.url);
   const js = readdirSync(dist).find((f) => f.endsWith('.js'));
   const bundle = readFileSync(new URL(js, dist), 'utf8');
-  assert.match(bundle, /\/gw\/api\/usage/);
+  assert.match(bundle, /\/gw\/api\/limits/, 'the app shell reads everything from the limits endpoint');
+  assert.match(bundle, /\/gw\/api\/restart/);
+  assert.match(bundle, /\/gw\/api\/stop\?hold=1/, 'the Stop button holds the stop');
   assert.match(bundle, /data-problem/, 'the banner renders the problem the gateway sends (the wording lives in gateway/src/states.js)');
   assert.ok(!/token allowance/.test(bundle), 'no second copy of the wording in the page');
 });
