@@ -27,6 +27,8 @@ The harness is built from a local checkout of deepseek-harness (default `../deep
 
 Run `tests/run.sh all` for regression tests (see [tests/README.md](tests/README.md)).
 
+Working on this repository (people or agents): read [AGENTS.md](AGENTS.md) first. In short: a new topic branch for every change, tests written and run, findings saved in `docs/`, repeatable tasks turned into scripts.
+
 ## Running it
 
 - **On a Mac, with gVisor:** `scripts/lima/setup.sh --stack` creates a Linux VM, installs gVisor and starts the stack with `SANDBOX_RUNTIME=runsc` ([docs/lima-setup.md](docs/lima-setup.md)). `scripts/lima/docker-context.sh` switches `docker` between Docker Desktop and the VM.
