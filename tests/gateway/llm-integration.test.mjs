@@ -163,8 +163,8 @@ test('/gw/api/usage: requires a session, returns only the caller\'s usage, hides
   const get = (cookie) => fetch(`http://127.0.0.1:${srv.address().port}/gw/api/usage`, { headers: cookie ? { cookie: `gw_session=${cookie}` } : {} });
   try {
     assert.equal((await get()).status, 401);
-    assert.deepEqual(await (await get(ta)).json(), { userId: a, day: { used: a * 10 } });
-    assert.deepEqual(await (await get(tb)).json(), { userId: b, day: { used: b * 10 } });
+    assert.deepEqual(await (await get(ta)).json(), { userId: a, day: { used: a * 10 }, global: null, problem: null });
+    assert.deepEqual(await (await get(tb)).json(), { userId: b, day: { used: b * 10 }, global: null, problem: null });
     assert.deepEqual(asked, [a, b], 'the user id comes from the session, never from the request');
     fail = true;
     const r = await get(ta);
@@ -178,11 +178,38 @@ test('/gw/api/usage: requires a session, returns only the caller\'s usage, hides
   }
 });
 
-test('the app shell bundle polls /gw/api/usage and explains an exhausted allowance', async () => {
+test('the app shell bundle polls /gw/api/usage and shows the gateway\'s designed state as a banner', async () => {
   const { readdirSync, readFileSync } = await import('node:fs');
   const dist = new URL('../../gateway/web/dist/', import.meta.url);
   const js = readdirSync(dist).find((f) => f.endsWith('.js'));
   const bundle = readFileSync(new URL(js, dist), 'utf8');
   assert.match(bundle, /\/gw\/api\/usage/);
-  assert.match(bundle, /token allowance/);
+  assert.match(bundle, /data-problem/, 'the banner renders the problem the gateway sends (the wording lives in gateway/src/states.js)');
+  assert.ok(!/token allowance/.test(bundle), 'no second copy of the wording in the page');
+});
+
+test('/gw/api/usage: an exhausted allowance or budget comes with its designed state; the shared totals are not exposed', async () => {
+  const day = { used: 500, limit: 500, resetsAt: '2026-06-11T00:00:00.000Z' };
+  const month = { used: 500, limit: 5000, resetsAt: '2026-07-01T00:00:00.000Z' };
+  for (const [usage, code] of [
+    [{ userId: 1, day, month, exhausted: true, blockedBy: 'day', global: null }, 'quota_day'],
+    [{ userId: 1, day, month, exhausted: true, blockedBy: 'day', global: { used: 9, limit: 10, exhausted: true, resetsAt: day.resetsAt } }, 'budget'],
+    [{ userId: 1, day: { ...day, used: 1 }, month, exhausted: false, blockedBy: null, global: { used: 9, limit: 10, exhausted: false, resetsAt: day.resetsAt } }, null],
+  ]) {
+    const store = new Store(':memory:');
+    const uid = store.createUser('u@example.com', 'x');
+    const manager = { touch() {}, llm: { usage: async () => usage } };
+    const server = createGateway({ cfg: { ...cfgOf(), allowSignup: true }, store, manager, log: () => {} });
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    try {
+      const cookie = `gw_session=${store.createSession(uid, 60)}`;
+      const r = await fetch(`http://127.0.0.1:${server.address().port}/gw/api/usage`, { headers: { cookie } });
+      const body = await r.json();
+      assert.equal(body.problem?.code ?? null, code);
+      if (usage.global) assert.deepEqual(body.global, { exhausted: usage.global.exhausted, resetsAt: usage.global.resetsAt }, 'no totals or limit of the shared budget');
+    } finally {
+      server.closeAllConnections();
+      server.close();
+    }
+  }
 });

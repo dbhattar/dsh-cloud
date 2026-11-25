@@ -59,6 +59,13 @@ export function createProxy({ cfg, store, log = console.log, fetchImpl = fetch, 
     return `You have used your ${report.blockedBy === 'day' ? 'daily' : 'monthly'} token allowance (${w.used} of ${w.limit}). It resets at ${w.resetsAt}.`;
   }
 
+  /** The service-wide daily budget as the gateway needs it to explain a refusal; null when there is no budget. */
+  function globalReport() {
+    if (!(cfg.globalDailyTokenBudget > 0)) return null;
+    const used = store.usedAllToday(now());
+    return { used, limit: cfg.globalDailyTokenBudget, exhausted: used >= cfg.globalDailyTokenBudget, resetsAt: new Date(windows(now()).dayResetsAt).toISOString() };
+  }
+
   async function admin(req, res, path) {
     const given = bearer(req);
     if (!given || !timingSafeEqual(digest(given), adminDigest)) return fail(res, 401, 'unauthorized', 'Invalid admin credentials.');
@@ -92,7 +99,7 @@ export function createProxy({ cfg, store, log = console.log, fetchImpl = fetch, 
       if (m[2] === undefined) return sendJson(res, 200, store.allUsed(now()).map((u) => usageReport(u.userId, u, cfg, now())));
       const id = userId(m[2]);
       if (id === null) return fail(res, 400, 'invalid_request', 'userId must be a positive integer.');
-      return sendJson(res, 200, usageReport(id, store.used(id, now()), cfg, now()));
+      return sendJson(res, 200, { ...usageReport(id, store.used(id, now()), cfg, now()), global: globalReport() });
     }
     return fail(res, 404, 'not_found', 'Not found.');
   }

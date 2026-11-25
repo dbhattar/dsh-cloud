@@ -27,6 +27,8 @@ Add `tests/phaseN/` for each new phase and list it in `run.sh`.
 
 | `sandbox/pins` | base images pinned by digest (and the check fails on a floating tag), one Node base everywhere matching CI, the harness lock is well formed, CI actions pinned by commit and every job has a timeout |
 | `gateway/busy` | busy-agent policy: model traffic and CPU keep an idle sandbox up, the cap stops it with the right audit rows, a returning browser resets the clock, failing signal sources fall back to the old behaviour, a busy sandbox is not evicted |
+| `gateway/states` | every designed state's wording (plain, no internals), numbers, classification of raw errors, notices, model-access priority (budget over quota), and `status()` wiring |
+| `phase5/states` | live: capacity, run-time stop (and the button restarting it), disk stop, personal quota then shared budget, and the idle notice, through the API and in a browser when Playwright is available (`tests/ui/browser.mjs`) |
 | `phase5/busy` | live: an idle sandbox is stopped at the idle limit while CPU-busy and model-busy ones survive with no browser attached, then both are stopped at the cap (`busy_cap`) and a returning user restarts normally |
 | `egress-proxy/` | address filter (private, loopback, link-local, metadata, IPv6 forms), rebinding defence, CONNECT and plain HTTP forwarding, port and scheme limits, connection cap |
 | `sandbox/` | the policy the entrypoint hands the harness: workspace-write rooted at /workspace, approval on, no danger-full-access preset |
@@ -37,6 +39,8 @@ Add `tests/phaseN/` for each new phase and list it in `run.sh`.
 
 Run the phase 4 and 5 suites under gVisor on the Lima VM (see `docs/lima-setup.md`):
 `DOCKER_CONTEXT=lima-dsh-linux SANDBOX_RUNTIME=runsc tests/run.sh phase4`. Under plain `runc` the shell-confinement test skips itself (bubblewrap needs user namespaces, which hardened runc denies).
+
+Browser checks use Playwright and a Chromium build found on the machine (by default in the sibling `deepseek-harness` checkout); without them the live suites run their API checks only.
 
 Not covered: microVM isolation, the browser UI of the locked-down policy, `linux-x64`.
 

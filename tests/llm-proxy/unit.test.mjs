@@ -638,3 +638,27 @@ test('activity: a request still waiting on the provider counts as in flight, and
     throw e;
   }
 });
+
+test('admin usage includes the service-wide budget state, or null when there is no budget', async () => {
+  let t = Date.UTC(2026, 5, 10, 12, 0, 0);
+  const h = await harness({ env: { GLOBAL_DAILY_TOKEN_BUDGET: '60', DAILY_TOKEN_QUOTA: '0', MONTHLY_TOKEN_QUOTA: '0' }, upstream: () => ok(10, 20), now: () => t });
+  try {
+    const a = h.store.issueToken(1);
+    let u = await (await h.adminCall('/admin/usage/1')).json();
+    assert.deepEqual(u.global, { used: 0, limit: 60, exhausted: false, resetsAt: '2026-06-11T00:00:00.000Z' });
+    await h.chat(a);
+    await h.chat(a); // 60 tokens
+    u = await (await h.adminCall('/admin/usage/1')).json();
+    assert.equal(u.global.used, 60);
+    assert.equal(u.global.exhausted, true);
+    assert.equal(u.exhausted, false, "the user's own quota is a separate fact");
+  } finally {
+    await h.close();
+  }
+  const open = await harness({ env: { GLOBAL_DAILY_TOKEN_BUDGET: '0' } });
+  try {
+    assert.equal((await (await open.adminCall('/admin/usage/1')).json()).global, null);
+  } finally {
+    await open.close();
+  }
+});
