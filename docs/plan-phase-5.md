@@ -33,7 +33,7 @@ Each task is one topic branch and one pull request, with tests and documentation
 | --- | --- | --- | --- |
 | **P5-1 Busy sandboxes stay up** (done, see "P5-1 result") | 18 | Today `reap()` in `gateway/src/sandbox.js` counts only browser sockets and proxied requests, so a long agent task with the tab closed is stopped after `IDLE_SECONDS`. Add activity signals: the llm-proxy's last model call per user (it already sees every call; expose it on the admin socket), and the runner's view of running processes in the container (to verify: what `docker top` or the cgroup reports under gVisor). Treat a sandbox as busy while either is recent, up to `MAX_BUSY_SECONDS` (new setting) after the last browser activity. | Unit tests for the policy with fake signals; Docker case: a sandbox running a long command and making model calls with no browser connected survives past the idle limit, and is stopped after the cap. |
 | **P5-2 Designed states** (done, see "P5-2 result") | 7 | One state model in the gateway for every reason a sandbox is not running or a request is refused: idle stop, run-time stop, disk stop, personal quota, global budget, capacity, harness crash, start failure. Each has a code, a plain title, what happened, what to do, and an action. `/gw/api/status` returns it; the launching page and the shell render it. | Unit tests per state; browser check of each visible state. |
-| **P5-3 Usage and limits panel, stop and restart** | 8, 9 | Extend `/gw/api/usage` with month tokens, storage used and limit (the runner's `/v1/usage`), time left in this run and idle time left. Shell panel with warnings at 80% and 95%; a Restart and a Stop button; a notice before a stop. | Unit tests for the numbers; browser check with a user near each limit. |
+| **P5-3 Usage and limits panel, stop and restart** (done, see "P5-3 result") | 8, 9 | Extend `/gw/api/usage` with month tokens, storage used and limit (the runner's `/v1/usage`), time left in this run and idle time left. Shell panel with warnings at 80% and 95%; a Restart and a Stop button; a notice before a stop. | Unit tests for the numbers; browser check with a user near each limit. |
 
 ### Slice 2: a toolbox that does the job
 
@@ -113,6 +113,30 @@ Every reason a workspace is unavailable, and every pause of model access, is now
 - Warnings before a limit (80% and 95%), a Restart or Stop button in the app, and storage and time-left numbers are P5-3.
 
 Tests: `tests/gateway/states.test.mjs` (every state's text, numbers, classification, notices, `usageProblem` priority, `status()` wiring), a gateway case for `/gw/api/usage`, a llm-proxy case for the budget state, and the live suite `tests/phase5/states.test.mjs`, which reaches each state on a real stack (capacity, run-time stop with the button restarting it, disk stop, personal quota then budget, idle notice) through the API and, when Playwright is found, in a browser (`tests/ui/browser.mjs`: a small helper that looks for Playwright and Chromium on the machine and skips browser checks if absent).
+
+## P5-3 result: usage and limits panel, Stop and Restart
+
+The top bar's usage text is now a button that opens a panel with what the user needs to know before a limit bites, and the two actions people reach for when something is stuck.
+
+**Panel.** Model tokens today and this month (with reset times), storage used of the limit, time left in this run, any early warnings, and **Restart workspace** and **Stop workspace**, each asking twice (the first click arms the button for five seconds). A banner under the bar shows the spent-allowance problem if there is one, otherwise the most urgent early warning. The page polls `/gw/api/limits` every 30 s and after each action; Escape closes the panel; meters carry `role="meter"` and the chip has `aria-expanded`.
+
+**Warnings** (`usageWarnings` in `gateway/src/states.js`, so the wording stays in one place): tokens at 80% ("You have used 80% of today's model allowance") and 95% ("almost used"); storage at 80%, 95% and over the limit (still a warning, because the workspace is only stopped at the next storage check); and the last 15 minutes of the run-time limit ("Your workspace will stop in 12 minutes", urgent in the last five). A meter that has reached its limit is not repeated as a warning for tokens; that is the problem state from P5-2. Order: errors before warnings, then closest to the limit first.
+
+**API.**
+- `GET /gw/api/limits` returns `{ workspace, tokens, storage, run, problem, warnings }`. Parts that cannot be known are null: no metering, runner unreachable, no limit configured, not running. Storage comes from the runner's `/v1/usage` through a one-minute cache, because Docker computes volume sizes on demand. The shared budget is reduced to `exhausted` and `resetsAt`. `/gw/api/usage` still exists, unchanged.
+- `POST /gw/api/stop?hold=1` is what the Stop button calls: the workspace stays stopped (new state `stopped_user`, "Your workspace is stopped", with a Start button) until the user starts it or visits the app again. Plain `POST /gw/api/stop` is unchanged, so scripts and the earlier suites still see a stopped workspace wake on the next request.
+- `POST /gw/api/restart` stops the container, audits `sandbox.restart` (the stop is recorded as `by: user_restart`), clears any hold and starts again. It answers once the old container is down and the new start is under way, so the reloading page finds a start in flight, not a half-stopped container.
+
+**Why a hold.** Any request used to wake a stopped workspace, so a Stop button on a page that stays open would be undone by the page's own next request. The hold is released by an explicit Start, or by a top-level page load of the app (the user coming back); it is not released by the open frame's requests, and limit stops (time, storage) are never released this way. It is in memory, so a gateway restart ends it.
+
+**Known gaps.**
+- No warning is shown for idle or busy-cap stops, because they only happen with no browser open; the user is told on return (P5-2 notices).
+- The run-time warning counts from the container's start, and a restart resets it.
+- The usage panel has had no usability testing, and no narrow-screen or screen-reader pass beyond roles and keyboard.
+- Restarting does not restore an in-progress agent turn (that is the crash-recovery task, P5-10).
+- Storage numbers lag by up to a minute (cache) and the stop check by up to `DISK_CHECK_SECONDS`.
+
+Tests: `tests/gateway/states.test.mjs` (every warning threshold, text and ordering), `tests/gateway/limits-panel.test.mjs` (the payload, the cache, hold, release, restart, and the HTTP surface), and the live suite `tests/phase5/panel.test.mjs` (real numbers, warnings as limits near, the panel in a browser, Restart with its container actually restarting and files kept, Stop staying stopped while the page keeps asking, and a page load releasing the hold).
 
 ## Idea list (effort: S under a day, M a few days, L a week or more)
 
