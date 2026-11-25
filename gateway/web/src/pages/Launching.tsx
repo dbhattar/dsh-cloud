@@ -4,7 +4,10 @@ import { Card } from '../Card.tsx';
 import { Button } from '../controls.tsx';
 import styles from './Launching.module.css';
 
-interface Status { state: 'running' | 'stopped' | 'error' | string; error?: string; resumed?: boolean; stage: number; elapsedMs: number }
+/** A designed state from the gateway (gateway/src/states.js): the text is already plain language. */
+interface Problem { code: string; severity: 'info' | 'warning' | 'error'; title: string; message: string; action: { kind: 'retry' | 'restart' | 'none'; label: string } }
+interface Notice { code: string; severity: 'info'; message: string }
+interface Status { state: 'running' | 'stopped' | 'error' | string; error?: string; problem?: Problem | null; notice?: Notice | null; resumed?: boolean; stage: number; elapsedMs: number }
 
 interface View {
   title: string;
@@ -13,20 +16,17 @@ interface View {
   allDone: boolean;
   meta: string;
   net: string;
-  error: { message: string; detail: string } | null;
+  error: { problem: Problem; detail: string } | null;
 }
 
 const INITIAL: View = { title: 'Starting your workspace', sub: 'Checking on your sandbox…', stage: 0, allDone: false, meta: '', net: '', error: null };
 
-function friendly(e: string): string {
-  if (/at capacity/.test(e)) return 'The service is full right now. Please try again in a few minutes.';
-  if (/maximum run time|storage/i.test(e)) return e;
-  if (/ENOTFOUND|EAI_AGAIN/.test(e)) return 'The gateway could not reach your sandbox on the internal network.';
-  if (/exited during startup/.test(e)) return 'Your sandbox stopped while starting.';
-  if (/timed out/.test(e)) return 'Your sandbox took too long to start.';
-  if (/docker/i.test(e)) return 'The gateway could not talk to the container runtime.';
-  return 'Something went wrong while starting your sandbox.';
-}
+/** Used only if the gateway sent no designed state (an older gateway, or an unexpected response). */
+const GENERIC: Problem = {
+  code: 'start_failed', severity: 'error', title: 'Your workspace could not start',
+  message: 'Something went wrong. Your files are safe. Try again; if it keeps happening, send us feedback and include the details below.',
+  action: { kind: 'retry', label: 'Try again' },
+};
 
 /** Polls /gw/api/status and reloads into the workspace once the sandbox runs; updates in place so nothing flickers. */
 export function Launching({ stages }: { stages: string[] }) {
@@ -66,17 +66,18 @@ export function Launching({ stages }: { stages: string[] }) {
           return;
         }
         if (j.state === 'error') {
-          const detail = j.error || 'unknown error';
-          patch({ title: 'We could not start your workspace', sub: '', stage: -1, meta: '', error: { message: friendly(detail), detail } });
+          const problem = j.problem ?? GENERIC;
+          patch({ title: 'Your workspace', sub: '', stage: -1, meta: '', error: { problem, detail: j.error || 'no details available' } });
           return;
         }
-        if (j.state === 'stopped') { patch({ sub: 'Waking up your sandbox…' }); start(); return; }
+        if (j.state === 'stopped') { patch({ sub: j.notice?.message ?? 'Waking up your workspace…' }); start(); return; }
         const s = Math.round(j.elapsedMs / 1000);
         patch({
           title: j.resumed ? 'Resuming your workspace' : 'Setting up your workspace',
-          sub: j.resumed
-            ? 'Your files and settings are kept. We are waking your sandbox.'
-            : 'First visit: creating a private sandbox with its own storage. This can take up to a minute.',
+          sub: j.notice?.message
+            ?? (j.resumed
+              ? 'Your files and settings are kept. We are waking your workspace.'
+              : 'First visit: creating a private workspace with its own storage. This can take up to a minute.'),
           stage: j.stage < 0 ? 0 : j.stage,
           meta: `${s}s elapsed${s > 30 ? ' · taking longer than usual, still working…' : ''}`,
         });
@@ -109,11 +110,13 @@ export function Launching({ stages }: { stages: string[] }) {
       {view.meta && <p className={styles.muted}>{view.meta}</p>}
       {view.net && <p className={styles.muted}>{view.net}</p>}
       {view.error && (
-        <div className={styles.error} role="alert">
-          <h2>Startup failed</h2>
-          <p>{view.error.message}</p>
+        <div className={clsx(styles.error, view.error.problem.severity === 'warning' && styles.warning)} role="alert" data-problem={view.error.problem.code}>
+          <h2>{view.error.problem.title}</h2>
+          <p>{view.error.problem.message}</p>
           <details><summary>Technical details</summary><span>{view.error.detail}</span></details>
-          <Button type="button" onClick={() => startRef.current()}>Try again</Button>
+          {view.error.problem.action.kind !== 'none' && (
+            <Button type="button" onClick={() => startRef.current()}>{view.error.problem.action.label}</Button>
+          )}
         </div>
       )}
     </Card>

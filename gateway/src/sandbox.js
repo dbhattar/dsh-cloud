@@ -1,4 +1,5 @@
 import http from 'node:http';
+import { SandboxProblem, classifyFailure, noticeFor, problemFor } from './states.js';
 
 /** Startup stages in order; the launching page renders these labels from /gw/api/status. */
 export const STAGES = [
@@ -34,6 +35,8 @@ export class SandboxManager {
     this.lastBusy = new Map(); // userId -> { at, signal } last time the agent looked busy
     this.keptBusy = new Set(); // userIds currently being kept alive past the idle limit (so the audit line is written once)
     this.signalWarned = false;
+    this.problems = new Map(); // userId -> { code, params } of the last failure or limit stop, for the designed state
+    this.lastStop = new Map(); // userId -> { by } when a stop the user did not ask for is waiting to be explained on return
   }
 
   name(userId) {
@@ -83,8 +86,20 @@ export class SandboxManager {
       stage: p ? STAGES.findIndex((x) => x.key === p.stage) : -1,
       resumed: p?.resumed ?? false,
       elapsedMs: p ? Date.now() - p.startedAt : 0,
-      error: this.errors.get(userId),
+      error: this.errors.get(userId), // the raw message: technical details and support, not for the main text
+      problem: this.state(userId) === 'error' ? this.#problem(userId) : null,
+      notice: ['starting', 'stopped'].includes(this.state(userId)) ? this.#notice(userId) : null,
     };
+  }
+
+  #problem(userId) {
+    const p = this.problems.get(userId) ?? { code: classifyFailure(this.errors.get(userId)), params: {} };
+    return problemFor(p.code, p.params, this.cfg);
+  }
+
+  #notice(userId) {
+    const stop = this.lastStop.get(userId);
+    return stop ? noticeFor(stop.by, this.cfg) : null;
   }
 
   state(userId) {
@@ -101,7 +116,7 @@ export class SandboxManager {
       // A limit stopped this sandbox. Background requests (an open browser tab) must not quietly restart it.
       if (!explicit) {
         this.audit.record('sandbox.refused', { userId, reason: 'held' });
-        this.errors.set(userId, this.held.get(userId));
+        this.errors.set(userId, this.held.get(userId)); // the problem (code and numbers) was recorded when it was held
         return Promise.reject(new Error(this.held.get(userId)));
       }
       this.held.delete(userId);
@@ -109,17 +124,20 @@ export class SandboxManager {
     let p = this.inflight.get(userId);
     if (!p) {
       this.errors.delete(userId); // a retry starts clean; never show the previous failure
+      this.problems.delete(userId);
       const startedAt = Date.now();
       this.progress.set(userId, { stage: 'prepare', resumed: false, startedAt });
       p = this.#start(userId)
         .then((entry) => {
           this.errors.delete(userId);
+          this.lastStop.delete(userId);
           this.cache.set(userId, entry);
           this.audit.record('sandbox.start', { userId, resumed: this.progress.get(userId)?.resumed ?? false, ms: Date.now() - startedAt });
           return entry;
         })
         .catch((e) => {
           this.errors.set(userId, e.message);
+          this.problems.set(userId, e instanceof SandboxProblem ? { code: e.code, params: e.params } : { code: classifyFailure(e.message), params: {} });
           this.log(`sandbox ${userId} failed to start: ${e.message}`);
           if (/at capacity/.test(e.message)) this.audit.record('sandbox.refused', { userId, reason: 'capacity' });
           else this.audit.record('sandbox.start_failed', { userId, error: e.message.slice(0, 300) });
@@ -216,7 +234,7 @@ export class SandboxManager {
         const victim = others
           .filter((s) => !this.inflight.has(s.userId) && (this.sockets.get(s.userId) ?? 0) === 0 && !this.isBusy(s.userId) && Date.now() - (this.lastSeen.get(s.userId) ?? 0) >= minIdle)
           .sort((a, b) => (this.lastSeen.get(a.userId) ?? 0) - (this.lastSeen.get(b.userId) ?? 0))[0];
-        if (!victim) throw new Error('the service is at capacity right now; try again in a few minutes');
+        if (!victim) throw new SandboxProblem('capacity', {}, 'the service is at capacity right now; try again in a few minutes');
         this.log(`at capacity (${others.length}/${max}): stopping idle sandbox ${victim.userId} to make room for ${userId}`);
         await this.stop(victim.userId, 'evicted');
         this.audit.record('sandbox.evicted', { userId: victim.userId, forUser: userId });
@@ -228,8 +246,9 @@ export class SandboxManager {
   }
 
   /** Stop a sandbox because of a limit and keep it stopped until the user starts it again on purpose. */
-  async #stopForLimit(userId, limit, message) {
+  async #stopForLimit(userId, limit, params, message) {
     this.held.set(userId, message);
+    this.problems.set(userId, { code: `stopped_${limit}`, params });
     this.log(`sandbox ${userId} stopped: ${message}`);
     try {
       await this.stop(userId, `limit:${limit}`);
@@ -249,7 +268,7 @@ export class SandboxManager {
         const since = info?.startedAt ? Date.parse(info.startedAt) : NaN;
         if (Number.isFinite(since) && Date.now() - since > maxRunSeconds * 1000) {
           const span = maxRunSeconds >= 3600 ? `${Math.round((maxRunSeconds / 3600) * 10) / 10} h` : `${Math.max(1, Math.round(maxRunSeconds / 60))} min`;
-          await this.#stopForLimit(userId, 'run_time', `Your workspace reached the maximum run time of ${span} and was stopped. Your files are kept; start it again to continue.`);
+          await this.#stopForLimit(userId, 'run_time', { maxRunSeconds }, `Your workspace reached the maximum run time of ${span} and was stopped. Your files are kept; start it again to continue.`);
         }
       }
     }
@@ -267,7 +286,7 @@ export class SandboxManager {
       for (const { userId, bytes } of usage) {
         if (bytes <= limit || !running.has(userId)) continue;
         const mb = Math.round(bytes / 1024 / 1024);
-        await this.#stopForLimit(userId, 'disk', `Your workspace uses ${mb} MB of storage, over the ${maxDiskMb} MB limit, so it was stopped. Start it again and delete files to get under the limit; it is checked every ${Math.max(1, Math.round(diskCheckSeconds / 60))} min.`);
+        await this.#stopForLimit(userId, 'disk', { usedMb: mb, limitMb: maxDiskMb, checkSeconds: diskCheckSeconds }, `Your workspace uses ${mb} MB of storage, over the ${maxDiskMb} MB limit, so it was stopped. Start it again and delete files to get under the limit; it is checked every ${Math.max(1, Math.round(diskCheckSeconds / 60))} min.`);
       }
     }
   }
@@ -301,6 +320,7 @@ export class SandboxManager {
     this.cache.delete(userId);
     await this.runner.stop(userId);
     this.audit.record('sandbox.stop', { userId, by });
+    if (noticeFor(by, this.cfg)) this.lastStop.set(userId, { by }); else this.lastStop.delete(userId);
     this.log(`sandbox ${userId} stopped`);
   }
 

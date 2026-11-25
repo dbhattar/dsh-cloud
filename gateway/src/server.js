@@ -4,6 +4,7 @@ import { Audit } from './audit.js';
 import { MIN_PASSWORD, RateLimiter, hashPassword, normalizeEmail, parseCookies, verifyPassword } from './auth.js';
 import { FEEDBACK_KINDS, WEB_DIST, appShellPage, feedbackPage, launchingPage, loginPage } from './pages.js';
 import { proxyHttp, proxyUpgrade } from './proxy.js';
+import { usageProblem } from './states.js';
 
 const COOKIE = 'gw_session';
 const ASSET_TYPES = { '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.woff2': 'font/woff2', '.svg': 'image/svg+xml' };
@@ -170,7 +171,10 @@ export function createGateway({ cfg, store, manager, log = console.log, audit = 
     if (path === '/gw/api/usage' && req.method === 'GET') {
       if (!manager.llm) return json(res, 404, { error: 'metering is not enabled' });
       try {
-        return json(res, 200, await manager.llm.usage(user.id));
+        const usage = await manager.llm.usage(user.id);
+        // The shared budget's totals are not the user's business; they only need to know whether it is used up and when it resets.
+        const global = usage.global ? { exhausted: usage.global.exhausted, resetsAt: usage.global.resetsAt } : null;
+        return json(res, 200, { ...usage, global, problem: usageProblem({ ...usage, global }) });
       } catch (e) {
         log(`usage lookup failed user=${user.id}: ${e.message}`);
         return json(res, 502, { error: 'usage unavailable' });

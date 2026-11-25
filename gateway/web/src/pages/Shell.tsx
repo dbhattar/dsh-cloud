@@ -18,7 +18,9 @@ function isFeedbackUrl(url: string | URL | undefined): url is string | URL {
 }
 
 interface UsageWindow { used: number; limit: number | null; resetsAt: string }
-interface Usage { day: UsageWindow; month: UsageWindow; exhausted: boolean; blockedBy: 'day' | 'month' | null }
+/** A designed state from the gateway (gateway/src/states.js). */
+interface Problem { code: string; severity: 'info' | 'warning' | 'error'; title: string; message: string }
+interface Usage { day: UsageWindow; month: UsageWindow; exhausted: boolean; blockedBy: 'day' | 'month' | null; problem?: Problem | null }
 
 const compact = new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 });
 const when = (iso: string) => new Date(iso).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
@@ -42,7 +44,6 @@ export function Shell({ email, src }: { email: string; src: string }) {
   const close = useCallback(() => setFeedback(null), []);
   const frameRef = useRef<HTMLIFrameElement>(null);
   const usage = useUsage();
-  const blocked = usage?.blockedBy ? usage[usage.blockedBy] : null;
 
   // Same origin, so the shell can wrap the harness window's open(). Re-applied on every iframe load.
   const hook = useCallback((frame: HTMLIFrameElement) => {
@@ -83,9 +84,9 @@ export function Shell({ email, src }: { email: string; src: string }) {
         <span className={styles.email}>{email}</span>
         <form method="post" action="/gw/logout"><Button variant="outline" className={styles.signout}>Sign out</Button></form>
       </header>
-      {usage?.exhausted && blocked && (
-        <div className={styles.banner} role="alert">
-          You have used your {usage.blockedBy === 'day' ? 'daily' : 'monthly'} token allowance. Model requests resume {when(blocked.resetsAt)}.
+      {usage?.problem && (
+        <div className={styles.banner} role="alert" data-problem={usage.problem.code}>
+          <strong>{usage.problem.title}.</strong> {usage.problem.message}
         </div>
       )}
       <iframe

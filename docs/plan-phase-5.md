@@ -32,7 +32,7 @@ Each task is one topic branch and one pull request, with tests and documentation
 | Task | Item | What and where | Verify |
 | --- | --- | --- | --- |
 | **P5-1 Busy sandboxes stay up** (done, see "P5-1 result") | 18 | Today `reap()` in `gateway/src/sandbox.js` counts only browser sockets and proxied requests, so a long agent task with the tab closed is stopped after `IDLE_SECONDS`. Add activity signals: the llm-proxy's last model call per user (it already sees every call; expose it on the admin socket), and the runner's view of running processes in the container (to verify: what `docker top` or the cgroup reports under gVisor). Treat a sandbox as busy while either is recent, up to `MAX_BUSY_SECONDS` (new setting) after the last browser activity. | Unit tests for the policy with fake signals; Docker case: a sandbox running a long command and making model calls with no browser connected survives past the idle limit, and is stopped after the cap. |
-| **P5-2 Designed states** | 7 | One state model in the gateway for every reason a sandbox is not running or a request is refused: idle stop, run-time stop, disk stop, personal quota, global budget, capacity, harness crash, start failure. Each has a code, a plain title, what happened, what to do, and an action. `/gw/api/status` returns it; the launching page and the shell render it. | Unit tests per state; browser check of each visible state. |
+| **P5-2 Designed states** (done, see "P5-2 result") | 7 | One state model in the gateway for every reason a sandbox is not running or a request is refused: idle stop, run-time stop, disk stop, personal quota, global budget, capacity, harness crash, start failure. Each has a code, a plain title, what happened, what to do, and an action. `/gw/api/status` returns it; the launching page and the shell render it. | Unit tests per state; browser check of each visible state. |
 | **P5-3 Usage and limits panel, stop and restart** | 8, 9 | Extend `/gw/api/usage` with month tokens, storage used and limit (the runner's `/v1/usage`), time left in this run and idle time left. Shell panel with warnings at 80% and 95%; a Restart and a Stop button; a notice before a stop. | Unit tests for the numbers; browser check with a user near each limit. |
 
 ### Slice 2: a toolbox that does the job
@@ -87,6 +87,32 @@ So CPU is the usable signal under gVisor; the process count Docker reports does 
 - Failures of either signal source are logged once and treated as "no signal".
 
 Tests: `tests/gateway/busy.test.mjs` (policy with a mocked clock and fake signals, including a mutation check that they fail when the policy is broken), activity cases in `tests/llm-proxy/unit.test.mjs` and `tests/runner/runner.test.mjs`, and the live suite `tests/phase5/busy.test.mjs` (idle limit 20 s, cap 90 s: an idle sandbox is stopped, CPU-busy and model-busy sandboxes survive, both stop at the cap with the audit rows).
+
+## P5-2 result: designed states
+
+Every reason a workspace is unavailable, and every pause of model access, is now one designed state with a stable code, a plain title, what happened and what to do, a severity (`info`, `warning`, `error`) and an action (`retry`, `restart` or `none`). The wording lives in one place, `gateway/src/states.js`; the pages render what the gateway sends and carry no wording of their own (a test checks that the old "token allowance" copy is gone from the bundle).
+
+| Code | When | Action |
+| --- | --- | --- |
+| `capacity` | the service is full and nobody is idle long enough to evict | Try again |
+| `stopped_run_time` | the continuous run-time limit stopped the workspace | Start my workspace |
+| `stopped_disk` | the storage limit stopped it (the message gives MB used and the limit) | Start my workspace |
+| `start_timeout`, `harness_exited`, `sandbox_unreachable`, `service_unavailable`, `model_unavailable`, `start_failed` | a start failed; untyped errors are classified from the raw message, most specific first | Try again |
+| `quota_day`, `quota_month` | the personal token allowance is spent (banner in the app) | none |
+| `budget` | the shared daily budget is spent (banner in the app; wins over a personal quota, because the user cannot fix it) | none |
+| `resumed_idle`, `resumed_busy_cap`, `resumed_evicted` | notices (not problems) shown while a stopped workspace starts again, saying why it had stopped | none |
+
+**API.** `/gw/api/status` returns `problem` (when the state is `error`) and `notice` (when starting or stopped after an unrequested stop), next to the unchanged raw `error` string, which the page shows under "Technical details". `/gw/api/usage` returns `problem` and a reduced `global` (`exhausted`, `resetsAt`; the shared totals and limit are not exposed to users). The llm-proxy's admin usage now includes the shared budget state. Typed errors (`SandboxProblem`) carry their numbers (the limit, the MB used); anything else is classified by `classifyFailure`.
+
+**Pages.** The launching page shows the problem's title and message with the action's button (no button for `none`), the notice as its subtitle while resuming, and the raw message under details. The app shell shows the usage problem as a banner. The model's own refusals inside the harness (HTTP 429 from the llm-proxy) already carry a clear message with the reset time and were left alone.
+
+**Known gaps.**
+- The notice after an idle stop is lost if the gateway restarts, since it is kept in memory; the user then just sees "resuming".
+- A harness crash is the generic `harness_exited` state; a better one (restart at once, restore the open session) is P5-10.
+- Copy is English only and has had no usability testing. The wording was written once and checked by test for leaks of internals, not by users.
+- Warnings before a limit (80% and 95%), a Restart or Stop button in the app, and storage and time-left numbers are P5-3.
+
+Tests: `tests/gateway/states.test.mjs` (every state's text, numbers, classification, notices, `usageProblem` priority, `status()` wiring), a gateway case for `/gw/api/usage`, a llm-proxy case for the budget state, and the live suite `tests/phase5/states.test.mjs`, which reaches each state on a real stack (capacity, run-time stop with the button restarting it, disk stop, personal quota then budget, idle notice) through the API and, when Playwright is found, in a browser (`tests/ui/browser.mjs`: a small helper that looks for Playwright and Chromium on the machine and skips browser checks if absent).
 
 ## Idea list (effort: S under a day, M a few days, L a week or more)
 
