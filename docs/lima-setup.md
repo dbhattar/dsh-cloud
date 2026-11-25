@@ -76,6 +76,18 @@ Things learned the hard way:
 
 See "What has and has not been verified" in [plan-phase-4.md](plan-phase-4.md): the sandbox boots and is isolated under `runsc`, and Docker's embedded DNS does not work inside a gVisor sandbox, which the runner works around with fixed addresses and `ExtraHosts` (details there).
 
+## Choosing the runtime (and what happens under the wrong one)
+
+Sandboxes run under the runtime in `SANDBOX_RUNTIME` (`runsc` is gVisor, `runc` is plain Docker). The compose default is `runc`, and the runtime is fixed when the runner container is created.
+
+**What goes wrong under runc.** The harness's shell tool refuses to run commands unconfined. Under runc user namespaces are denied (so bubblewrap cannot work) and the Landlock launcher is not in the image, so the model gets "Error: sandbox mode "workspace-write" is requested but no sandbox backend is usable on this host; refusing to run the command unconfined. Install bubblewrap or run a Landlock-enforcing kernel...". The page itself works, so the failure only shows when the agent tries to run a command. Seen on 2026-11-25: after a restart of the VM stack without `SANDBOX_RUNTIME=runsc`, the runner created sandboxes under runc and the shell tool failed. Another sign: `docker inspect -f '{{.HostConfig.Runtime}}' dsh-sbx-<id>` says `runc`, and `uname -r` inside says the VM's kernel (for example `7.0.0-43-generic`) instead of `4.19.0-gvisor`.
+
+**How it is chosen now.** `scripts/restart.sh` decides, first match wins: `--runtime`; the `SANDBOX_RUNTIME` environment variable; `SANDBOX_RUNTIME` in `.env`; otherwise automatic, which means `runsc` if the current Docker daemon has it registered, else `runc` with a warning. It follows the Docker context, so the VM gets gVisor and Docker Desktop gets runc without any edit. A runtime the daemon does not have is refused before anything is touched (`restart.sh --runtime runsc` on Docker Desktop says so and points here). `restart.sh --print-runtime` prints the choice and the reason and changes nothing. The runner also logs a `WARNING` at startup when it runs under runc, so a stack started some other way (a bare `docker compose up`) is still obvious: `docker logs dshcloud-sandbox-runner-1 | head`.
+
+**To fix a stack that is on the wrong runtime:** `scripts/restart.sh` in the VM context (or `scripts/lima/setup.sh --stack`). Existing sandboxes are removed and recreated on the user's next visit; accounts, files and sessions are kept.
+
+Checked: against the real Lima and Docker Desktop contexts `--print-runtime` reports `runsc` and `runc` respectively; a bare `restart.sh` in the VM context produced a runner with `SANDBOX_RUNTIME=runsc` and no warning; the runner's warning appears under runc and not under runsc. The decision logic is covered by `tests/scripts/restart-runtime.test.mjs` (precedence, `.env` parsing, refusal of an unregistered runtime, no side effects) and the warning by a runner unit test.
+
 ## Using the VM's Docker from the Mac
 
 `scripts/lima/docker-context.sh lima` creates a Docker context (`lima-dsh-linux`) for the VM's socket and makes it current; `desktop` switches back; `status` shows where `docker` points. Lima forwards ports published inside the VM to `localhost` on the Mac, so a stack started this way is reachable at the same URLs. Tested with throwaway containers on ports 81 and 18080.
