@@ -43,6 +43,10 @@ sqlite_backup() { # volume file name
   docker run --rm -v "$1:/data" "$IMG" node --input-type=module -e "$TOOL" backup "/data/$2" > "$DEST/$3.db"
   [ -s "$DEST/$3.db" ] || { echo "backup of $3 is empty" >&2; exit 1; }
   echo "   $3.db ($(wc -c < "$DEST/$3.db" | tr -d ' ') bytes)"
+  # Who owns the data: the service that uses this volume may not run as root (the llm-proxy runs as `node`), and a volume
+  # created fresh by a restore is root-owned unless restore.sh sets it back. Recorded as uid:gid in the manifest.
+  own="$(docker run --rm -v "$1:/data:ro" "$IMG" stat -c '%u:%g' /data "/data/$2")"
+  printf 'dirowner.%s=%s\nowner.%s=%s\n' "$3" "$(printf '%s\n' "$own" | sed -n 1p)" "$3" "$(printf '%s\n' "$own" | sed -n 2p)" >> "$DEST/.owners"
 }
 echo "==> databases"
 sqlite_backup "${PROJECT}_gateway-data" gateway.db gateway
@@ -74,6 +78,7 @@ for db in gateway llm-proxy; do
   [ -f "$DEST/$db.db" ] || continue
   printf 'counts.%s=%s\n' "$db" "$(docker run --rm -i "$IMG" sh -c 'cat > /tmp/in.db; exec node --input-type=module -e "$0" check /tmp/in.db' "$TOOL" < "$DEST/$db.db")" >> "$DEST/MANIFEST"
 done
+[ ! -f "$DEST/.owners" ] || { cat "$DEST/.owners" >> "$DEST/MANIFEST"; rm -f "$DEST/.owners"; }
 for f in "$DEST"/volumes/*.tar.gz; do
   [ -f "$f" ] || continue
   printf 'files.%s=%s\n' "$(basename "$f" .tar.gz)" "$(tar tzf "$f" | grep -vc '/$' || true)" >> "$DEST/MANIFEST"

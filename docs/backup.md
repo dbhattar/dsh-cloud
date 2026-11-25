@@ -43,7 +43,9 @@ scripts/restore.sh --yes backups/dsh-20261123-235128
 scripts/restart.sh                                               # or: docker compose ... up -d
 ```
 
-`--yes` replaces the databases (including their WAL files) and the volumes in the backup, and refuses to run while the stack or any sandbox is running. Anything created after the backup is lost: accounts, invites, audit rows, workspace changes. Volumes that exist now but are not in the backup are left alone. Sandboxes are recreated on the user's next visit with a fresh proxy token.
+`--yes` replaces the databases (including their WAL files) and the volumes in the backup. It refuses to run while the stack is running, and also while any user sandbox is running if the backup holds user volumes (a database-only backup is not blocked by sandboxes).
+
+**File ownership is restored too.** The manifest records the owner (`uid:gid`) of each database and its directory (`owner.<db>`, `dirowner.<db>`). The llm-proxy runs as the unprivileged `node` user (1000), so its database must belong to it. A restore into a volume that did not exist yet used to create it root-owned, and the llm-proxy then exited at start with "attempt to write a readonly database" (seen on 2026-11-25; my earlier restores had only worked because the volumes already existed). Now `restore.sh` applies the recorded owner; for backups made before owners were recorded it keeps the owner an existing volume already has, and otherwise uses the service default (llm-proxy 1000:1000, gateway root). A malformed owner value in a manifest is ignored. User volumes need nothing extra: `tar` restores their ownership from the archive. Anything created after the backup is lost: accounts, invites, audit rows, workspace changes. Volumes that exist now but are not in the backup are left alone. Sandboxes are recreated on the user's next visit with a fresh proxy token.
 
 ## Verified
 
