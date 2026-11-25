@@ -79,6 +79,15 @@ export class Store {
       .run(hashToken(code), note, now, ttlDays > 0 ? now + ttlDays * 86400000 : null);
     return code;
   }
+  /** 'valid', 'used', 'expired' or 'unknown' (never seen, or empty). Only the hash of a code is stored. */
+  inviteStatus(code, now = Date.now()) {
+    if (typeof code !== 'string' || !code.trim()) return 'unknown';
+    const r = this.db.prepare('SELECT used_by, expires_at FROM invites WHERE code_hash = ?').get(hashToken(code.trim()));
+    if (!r) return 'unknown';
+    if (r.used_by !== null) return 'used';
+    if (r.expires_at !== null && r.expires_at <= now) return 'expired';
+    return 'valid';
+  }
   /** True if the code exists, is unused and has not expired. */
   inviteValid(code, now = Date.now()) {
     if (typeof code !== 'string' || !code) return false;

@@ -1,3 +1,19 @@
 .form { display: grid; gap: 12px; }
 .note { margin: 0; color: var(--dsw-alias-label-secondary); }
 .divider { margin: 24px 0 0; padding-top: 24px; border-top: 0.5px solid var(--dsw-alias-border-l3); }
+
+.heading { margin: 0; font-size: 16px; line-height: 24px; }
+.good { margin: 0; padding: 8px 10px; border-radius: var(--dsw-radius-md); background: var(--dsw-alias-bg-layer-2); border-left: 3px solid var(--dsw-alias-state-success-primary); }
+.hint { margin: 0; font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-tertiary); }
+.passwordField { display: grid; gap: 4px; }
+.passwordLabel { font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary); }
+.passwordWrap { position: relative; display: flex; }
+.passwordWrap input { padding-right: 64px; }
+.reveal {
+  position: absolute; right: 4px; top: 50%; transform: translateY(-50%);
+  height: 28px; padding: 0 8px; font: inherit; font-size: 12px; cursor: pointer;
+  color: var(--dsw-alias-label-secondary); background: transparent; border: 0; border-radius: var(--dsw-radius-sm);
+}
+.reveal:hover { background: var(--dsw-alias-interactive-bg-hover); }
+.reveal:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); }
+.srOnly { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }

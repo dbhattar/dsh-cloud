@@ -1,34 +1,63 @@
+import { useId, useState } from 'react';
 import { Card } from '../Card.tsx';
 import { Button, ErrorNote, Field, inputClass } from '../controls.tsx';
 import styles from '../form.module.css';
 
-function Fields({ passwordAutocomplete }: { passwordAutocomplete: string }) {
+/** Password input with a Show or Hide toggle. The label is tied by id (a button inside a <label> would be invalid). */
+function PasswordField({ autoComplete, hint, minLength }: { autoComplete: string; hint?: string; minLength?: number }) {
+  const id = useId();
+  const [shown, setShown] = useState(false);
   return (
-    <>
-      <Field label="Email"><input className={inputClass} name="email" type="email" autoComplete="username" required /></Field>
-      <Field label="Password"><input className={inputClass} name="password" type="password" autoComplete={passwordAutocomplete} minLength={10} required /></Field>
-    </>
+    <div className={styles.passwordField}>
+      <label htmlFor={id} className={styles.passwordLabel}>Password</label>
+      <div className={styles.passwordWrap}>
+        <input id={id} className={inputClass} name="password" type={shown ? 'text' : 'password'} autoComplete={autoComplete} minLength={minLength} required />
+        <button type="button" className={styles.reveal} aria-pressed={shown} aria-controls={id} onClick={() => setShown((v) => !v)}>
+          {shown ? 'Hide' : 'Show'}<span className={styles.srOnly}> password</span>
+        </button>
+      </div>
+      {hint && <p className={styles.hint}>{hint}</p>}
+    </div>
   );
 }
 
-export function Login({ error, allowSignup, inviteRequired = false }: { error?: string | undefined; allowSignup: boolean; inviteRequired?: boolean }) {
-  return (
-    <Card title="Sign in">
-      {error && <ErrorNote>{error}</ErrorNote>}
-      <form className={styles.form} method="post" action="/gw/login">
-        <Fields passwordAutocomplete="current-password" />
-        <Button>Sign in</Button>
-      </form>
-      {allowSignup && (
-        <form className={`${styles.form} ${styles.divider}`} method="post" action="/gw/signup">
-          <h2 style={{ margin: 0, fontSize: 16, lineHeight: '24px' }}>Create account</h2>
-          <Fields passwordAutocomplete="new-password" />
-          {inviteRequired && (
-            <Field label="Invite code"><input className={inputClass} name="invite" type="text" autoComplete="off" required /></Field>
-          )}
-          <Button variant="outline">Sign up</Button>
-        </form>
+interface Props {
+  error?: string | undefined;
+  allowSignup: boolean;
+  inviteRequired?: boolean | undefined;
+  invite?: { code: string; status: 'valid' | 'used' | 'expired' | 'unknown' } | null | undefined;
+  next?: string | null | undefined;
+  email?: string | null | undefined;
+  mode?: 'login' | 'signup' | undefined;
+}
+
+export function Login({ error, allowSignup, inviteRequired = false, invite = null, next = null, email = null, mode = 'login' }: Props) {
+  const signInForm = (
+    <form key="signin" className={styles.form} method="post" action="/gw/login" aria-label="Sign in">
+      {mode === 'signup' && <h2 className={styles.heading}>Already have an account?</h2>}
+      {next && <input type="hidden" name="next" value={next} />}
+      <Field label="Email"><input className={inputClass} name="email" type="email" autoComplete="username" defaultValue={mode === 'login' ? email ?? '' : ''} autoFocus={mode === 'login'} required /></Field>
+      <PasswordField autoComplete="current-password" />
+      <Button variant={mode === 'signup' ? 'outline' : 'primary'}>Sign in</Button>
+    </form>
+  );
+  const signUpForm = allowSignup && (
+    <form key="signup" className={`${styles.form} ${mode === 'login' ? styles.divider : ''}`} method="post" action="/gw/signup" aria-label="Create account">
+      {mode === 'login' && <h2 className={styles.heading}>Create your account</h2>}
+      {mode === 'signup' && invite?.status === 'valid' && <p className={styles.good} role="status">You have been invited. Create your account to get started.</p>}
+      {next && <input type="hidden" name="next" value={next} />}
+      <Field label="Email"><input className={inputClass} name="email" type="email" autoComplete="username" defaultValue={mode === 'signup' ? email ?? '' : ''} autoFocus={mode === 'signup'} required /></Field>
+      <PasswordField autoComplete="new-password" minLength={10} hint="At least 10 characters." />
+      {inviteRequired && (
+        <Field label="Invite code"><input className={inputClass} name="invite" type="text" autoComplete="off" spellCheck={false} defaultValue={invite?.code ?? ''} required /></Field>
       )}
+      <Button variant={mode === 'signup' ? 'primary' : 'outline'}>Create account</Button>
+    </form>
+  );
+  return (
+    <Card title={mode === 'signup' ? 'Create your account' : 'Sign in'}>
+      {error && <ErrorNote>{error}</ErrorNote>}
+      {mode === 'signup' ? <>{signUpForm}<div className={styles.divider}>{signInForm}</div></> : <>{signInForm}{signUpForm}</>}
     </Card>
   );
 }

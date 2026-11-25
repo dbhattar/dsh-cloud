@@ -1,5 +1,5 @@
 // Operator commands, run inside the gateway container (see scripts/invite.sh):
-//   node src/cli.js invite create [count] [--note TEXT] [--days N]
+//   node src/cli.js invite create [count] [--note TEXT] [--days N] [--link]
 //   node src/cli.js invite list
 //   node src/cli.js audit [--user ID] [--event NAME|PREFIX.] [--since 24h|7d] [--limit N] [--json]
 import { join } from 'node:path';
@@ -17,7 +17,12 @@ const flag = (name) => {
 
 if (area === 'invite' && action === 'create') {
   const count = Math.min(100, Math.max(1, Number.parseInt(rest.find((a) => /^\d+$/.test(a)) ?? '1', 10)));
-  for (let i = 0; i < count; i++) console.log(store.createInvite({ note: flag('--note') ?? '', ttlDays: Number.parseInt(flag('--days') ?? '0', 10) || 0 }));
+  // --link prints each code as a sign-up link (PUBLIC_URL is set in the gateway's environment) instead of the bare code.
+  const base = rest.includes('--link') ? new URL('gw/signup', process.env.PUBLIC_URL || 'https://localhost/').href : null;
+  for (let i = 0; i < count; i++) {
+    const code = store.createInvite({ note: flag('--note') ?? '', ttlDays: Number.parseInt(flag('--days') ?? '0', 10) || 0 });
+    console.log(base ? `${base}?invite=${encodeURIComponent(code)}` : code);
+  }
   store.addAudit({ event: 'admin.invite_create', detail: { count, note: flag('--note') ?? '', via: 'cli' } });
 } else if (area === 'invite' && action === 'list') {
   const when = (t) => (t ? new Date(t).toISOString().slice(0, 16).replace('T', ' ') : '-');
@@ -32,6 +37,6 @@ if (area === 'invite' && action === 'create') {
     else console.log(`${new Date(r.ts).toISOString().slice(0, 19).replace('T', ' ')}  ${r.event.padEnd(18)} user=${String(r.userId ?? '-').padEnd(4)} ip=${String(r.ip ?? '-').padEnd(15)} ${Object.keys(r.detail).length ? JSON.stringify(r.detail) : ''}`);
   }
 } else {
-  console.error('usage: cli.js invite create [count] [--note TEXT] [--days N] | invite list | audit [--user ID] [--event NAME] [--since 24h] [--limit N] [--json]');
+  console.error('usage: cli.js invite create [count] [--note TEXT] [--days N] [--link] | invite list | audit [--user ID] [--event NAME] [--since 24h] [--limit N] [--json]');
   process.exit(2);
 }
