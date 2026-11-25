@@ -28,6 +28,14 @@ The harness is built from a local checkout, so a commit id is not enough: the wo
 
 A locked, dirty checkout reproduces the build only while the same uncommitted files exist. To make a release reproducible from a commit, commit the harness changes first and update the lock.
 
+## Dependabot policy
+
+`.github/dependabot.yml` proposes updates weekly, with these rules (learned from the first batch of pull requests):
+
+- **Docker:** all Dockerfiles go in one grouped pull request, so the Node base never differs between services. Node **major** versions are ignored: moving to a new Node major is a deliberate change (every Dockerfile, `harness.Dockerfile`, the CI `node-version`, then the suites under gVisor). When a 24.x pull request arrives, also update `node-version` in `.github/workflows/ci.yml`; `tests/sandbox/pins.test.mjs` fails until the two match.
+- **npm (gateway pages):** `react`, `react-dom` and their `@types` are one group, and `vite` with `@vitejs/plugin-react` is another. Each pair has a peer dependency on the other: Vite 8 alone, plugin-react 6 alone, React 19 alone and react-dom 19 alone each fail `npm ci` (checked), while each pair together installs and builds, as does React 19 with Vite 8. The build passing does not prove the pages render under React 19; look at them in a browser before merging that group.
+- Open pull requests are capped per ecosystem to limit noise. `main` requires pull requests, so these arrive as ordinary reviews: merge when CI is green.
+
 ## What is not pinned
 
 - **Debian packages** installed in the sandbox image (`bubblewrap`) resolve at build time from the pinned base image's Debian release. A security update can change the patch version between two builds. Pinning an exact version would instead break the build when Debian removes it; revisit if you need bit-for-bit images (build once, push the image, deploy the digest).
