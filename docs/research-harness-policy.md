@@ -180,3 +180,9 @@ Not done, and why:
 - **`linux-x64`.** Only `linux-arm64` was exercised.
 - **The approval prompt and preset selector in a browser** were not looked at.
 - **The new Docker-suite test** is syntax-checked, not run (dev-data guard), like the other phase 4 additions.
+
+## First-run "Preview Notice" (follow-up)
+
+A new user saw the harness's versioned "Preview Notice" popup until they clicked Continue. It comes from `dsh-client-ui-settings-models`; the acknowledgement is the `welcomeNoticeVersion` field of the `ui-settings-general` row, so a patch can pre-acknowledge it. `sandbox/entrypoint.sh` does that, with the version read at image build from the harness source (`sandbox/Dockerfile` writes `/opt/dsh/WELCOME_NOTICE_VERSION` and fails the build if the harness moves or renames it). Checked in a real browser (Playwright, Chromium) against the stack in the Lima VM: before the change a new account got the popup; after it, a new account went straight to the app. If the harness changes the notice's copy it bumps the version, and a rebuild picks the new one up.
+
+The harness's separate "Add an API key" first-run step does not appear: it ends as soon as any provider can serve requests, and the llm-proxy route counts. The small "Preview" badge next to the title is the harness's own branding and was left alone.

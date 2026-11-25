@@ -6,6 +6,13 @@ COPY .harness-dist/ /opt/dsh/
 RUN test -f /opt/dsh/apps/cli/lib/bin.js \
  && ln -s /opt/dsh/apps/cli/lib/bin.js /usr/local/bin/dsh && chmod +x /opt/dsh/apps/cli/lib/bin.js
 
+# The harness shows a versioned "Preview Notice" to every new user until they click Continue. Our users are not
+# harness developers, so the entrypoint records that version as acknowledged (ui-settings-general). The version is
+# read from the harness source here, so a harness upgrade that changes it is picked up on rebuild, and a harness
+# that moves or renames it fails this build instead of quietly bringing the popup back.
+RUN v="$(sed -n "s/^export const WELCOME_NOTICE_VERSION = '\([^']*\)'.*/\1/p" /opt/dsh/packages/client/ui-settings-models/src/onboarding-copy.ts)" \
+ && test -n "$v" && printf '%s\n' "$v" > /opt/dsh/WELCOME_NOTICE_VERSION
+
 # bubblewrap confines the agent's shell commands to the workspace (the harness tries bwrap, then Landlock, and
 # refuses to run a command unconfined). It works under gVisor, which allows the unprivileged user namespaces
 # that hardened runc forbids; see docs/research-harness-policy.md.
