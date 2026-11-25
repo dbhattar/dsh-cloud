@@ -33,6 +33,11 @@ export function loadConfig(env = process.env) {
     // Capacity and abuse limits; 0 turns each off.
     maxRunningSandboxes: int('MAX_RUNNING_SANDBOXES', 0),
     evictAfterIdleSeconds: int('EVICT_AFTER_IDLE_SECONDS', 300), // when full, only sandboxes idle this long may be stopped for a newcomer
+    // A sandbox whose agent is busy (recent model calls, or CPU use) is not stopped for being idle while the browser is
+    // closed, for up to this long since the user's last activity. 0 turns the feature off (idle sandboxes stop as before).
+    maxBusySeconds: int('MAX_BUSY_SECONDS', 0),
+    busyCpuPercent: int('BUSY_CPU_PERCENT', 5), // of one CPU, averaged over the reap interval
+    busySignalSeconds: int('BUSY_SIGNAL_SECONDS', 300), // how long a model call or CPU burst keeps counting as "busy"
     maxRunSeconds: int('MAX_RUN_SECONDS', 0), // continuous run time before a sandbox is stopped
     maxDiskMb: int('MAX_DISK_MB', 0), // per user, both volumes together
     diskCheckSeconds: int('DISK_CHECK_SECONDS', 300),

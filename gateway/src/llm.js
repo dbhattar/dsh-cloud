@@ -41,6 +41,10 @@ export class LlmProxyClient {
   revoke(userId) {
     return this.#call('DELETE', `/admin/tokens/${userId}`);
   }
+  /** { users: [{ userId, inflight, lastAt }] } for users with a model request in flight or one in the last 15 minutes. */
+  activity() {
+    return this.#call('GET', '/admin/activity');
+  }
   usage(userId) {
     return this.#call('GET', `/admin/usage/${userId}`);
   }

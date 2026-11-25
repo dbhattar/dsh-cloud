@@ -1,6 +1,7 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import http from 'node:http';
 import { Limiter } from './limits.js';
+import { ActivityTracker } from './activity.js';
 import { usageReport, windows } from './quota.js';
 import { SseUsageScanner, usageOf } from './usage-parse.js';
 
@@ -17,6 +18,7 @@ const digest = (s) => createHash('sha256').update(s).digest();
 export function createProxy({ cfg, store, log = console.log, fetchImpl = fetch, now = Date.now }) {
   const limiter = new Limiter({ perMinute: cfg.rateLimitPerMinute, maxConcurrent: cfg.maxConcurrent, now });
   const adminDigest = digest(cfg.adminSecret);
+  const activity = new ActivityTracker();
   // Audit lines: one JSON object per event, no request or model content. Quota hits repeat on every blocked
   // request, so each (event, user) is written at most once per 10 minutes.
   const auditSeen = new Map();
@@ -73,6 +75,10 @@ export function createProxy({ cfg, store, log = console.log, fetchImpl = fetch, 
       audit('token.issue', { userId: id });
       return sendJson(res, 200, { token: store.issueToken(id, now()) });
     }
+    if (path === '/admin/activity' && req.method === 'GET') {
+      // Users with a model request in flight or finished in the last 15 minutes (the gateway applies its own window).
+      return sendJson(res, 200, { users: activity.snapshot(now(), 15 * 60 * 1000) });
+    }
     const m = /^\/admin\/(tokens|usage)(?:\/([^/]*))?$/.exec(path);
     if (m?.[1] === 'tokens' && req.method === 'DELETE') {
       const id = userId(m[2]);
@@ -98,6 +104,7 @@ export function createProxy({ cfg, store, log = console.log, fetchImpl = fetch, 
       const msg = lease.reason === 'rate' ? 'Too many requests. Slow down.' : 'Too many requests in flight.';
       return fail(res, 429, 'rate_limited', msg, { 'retry-after': String(lease.retryAfter) });
     }
+    activity.begin(userId, now());
     const ctrl = new AbortController();
     let model = '-';
     let status = 0;
@@ -215,6 +222,7 @@ export function createProxy({ cfg, store, log = console.log, fetchImpl = fetch, 
       }
     } finally {
       lease.release();
+      activity.end(userId, now());
       if (usage) store.record(userId, usage, now());
       log(
         JSON.stringify({

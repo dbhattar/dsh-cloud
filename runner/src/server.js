@@ -45,6 +45,7 @@ async function readJson(req) {
  *   POST   /v1/sandboxes/:id          { llmToken? } create (409 if it exists)
  *   POST   /v1/sandboxes/:id/start    204; 409 { error: 'stale_network' } if its network was recreated
  *   POST   /v1/sandboxes/:id/stop     204
+ *   GET    /v1/sandboxes/:id/activity { cpuNs, memBytes } cumulative CPU time and memory of the running container
  *   DELETE /v1/sandboxes/:id          remove the container, keep the volumes
  *   GET    /v1/sandboxes/:id/logs     { logs } (?tail=N, max 500)
  */
@@ -116,6 +117,12 @@ export function createRunner({ cfg, docker, log = console.log, networks = new Ne
       await docker.stop(name);
       log(`stopped sandbox ${id}`);
       return json(res, 204);
+    }
+    if (action === 'activity' && method === 'GET') {
+      // Cumulative CPU time of the container; the gateway differences two samples to see whether it is busy.
+      const sample = await docker.stats(name);
+      if (!sample) throw new HttpError(404, 'no such sandbox');
+      return json(res, 200, sample);
     }
     if (action === 'logs' && method === 'GET') {
       const tail = Math.min(500, Math.max(1, Number.parseInt(url.searchParams.get('tail') ?? '100', 10) || 100));

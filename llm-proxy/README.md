@@ -27,6 +27,7 @@ Served only on a unix socket (`ADMIN_SOCKET`, default `/run/llm-admin/admin.sock
 | `POST /admin/tokens` `{userId}` | issue or rotate a user's token; the plaintext is returned once |
 | `DELETE /admin/tokens/:userId` | revoke (model access stops immediately) |
 | `GET /admin/usage/:userId`, `GET /admin/usage` | usage, limits and reset times |
+| `GET /admin/activity` | `{ users: [{ userId, inflight, lastAt }] }`: users with a model request in flight or one that ended in the last 15 minutes (in memory; the gateway uses it to keep busy sandboxes running) |
 
 The proxy has no published port; `/v1` is reachable from the compose network and from each user network. `scripts/usage.sh` prints per-user totals.
 

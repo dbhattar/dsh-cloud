@@ -599,3 +599,42 @@ test('audit: token issue/revoke, quota hits and budget hits are logged as JSON w
     await h.close();
   }
 });
+
+test('activity: the admin socket reports who has a model request in flight or finished recently; the user listener does not serve it', async () => {
+  let t = Date.UTC(2026, 5, 10, 12, 0, 0);
+  const h = await harness({ env: { DAILY_TOKEN_QUOTA: '0', MONTHLY_TOKEN_QUOTA: '0' }, upstream: () => ok(1, 1), now: () => t });
+  try {
+    const a = h.store.issueToken(1);
+    const idle = await (await h.adminCall('/admin/activity')).json();
+    assert.deepEqual(idle.users, [], 'nobody yet');
+    assert.equal((await h.chat(a)).status, 200);
+    const after = (await (await h.adminCall('/admin/activity')).json()).users;
+    assert.equal(after.length, 1);
+    assert.deepEqual({ userId: after[0].userId, inflight: after[0].inflight, lastAt: after[0].lastAt }, { userId: 1, inflight: 0, lastAt: new Date(t).toISOString() });
+    t += 16 * 60 * 1000;
+    assert.deepEqual((await (await h.adminCall('/admin/activity')).json()).users, [], 'forgotten after 15 minutes');
+    assert.equal((await h.adminCall('/admin/activity', 'GET', undefined, null)).status, 401, 'needs the admin secret');
+    assert.equal((await h.call('/admin/activity', { method: 'GET', token: a })).status, 404, 'not on the user listener');
+  } finally {
+    await h.close();
+  }
+});
+
+test('activity: a request still waiting on the provider counts as in flight, and stops counting when it ends', async () => {
+  const h = await harness({ env: { DAILY_TOKEN_QUOTA: '0', MONTHLY_TOKEN_QUOTA: '0' }, upstream: () => ({ hang: true }) });
+  try {
+    const a = h.store.issueToken(7);
+    const pending = h.chat(a).catch(() => null);
+    let inflight = 0;
+    for (let i = 0; i < 50 && inflight === 0; i++) {
+      await new Promise((r) => setTimeout(r, 20));
+      inflight = (await (await h.adminCall('/admin/activity')).json()).users.find((u) => u.userId === 7)?.inflight ?? 0;
+    }
+    assert.equal(inflight, 1);
+    await h.close();
+    await pending;
+  } catch (e) {
+    await h.close().catch(() => {});
+    throw e;
+  }
+});

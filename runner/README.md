@@ -15,6 +15,7 @@ API on the compose network, which sandboxes never join (`Authorization: Bearer R
 | `POST /v1/sandboxes/:id/stop` | stop |
 | `DELETE /v1/sandboxes/:id` | remove the container, keep the volumes and the user network; `?network=1` also removes the network |
 | `GET /v1/sandboxes/:id/logs?tail=N` | `{ logs }`, N at most 500 |
+| `GET /v1/sandboxes/:id/activity` | `{ cpuNs, memBytes }`: cumulative CPU time and memory of the running container, one Docker stats sample; the gateway differences two samples to see whether the sandbox is busy; 404 if there is no such container |
 | `GET /v1/usage` | `[{ userId, bytes }]`: disk used by each user's `dsh-data-<id>` and `dsh-ws-<id>` volumes (Docker computes sizes on demand, so it can take seconds) |
 
 Config (env): `PUBLIC_URL`, `RUNNER_SECRET` (min 16 chars) required; `SANDBOX_IMAGE`, `SHARED_ROLES`, `RECONCILE_SECONDS`, `SANDBOX_MEMORY_MB`, `SANDBOX_CPUS`, `SANDBOX_PIDS`, `SANDBOX_TMP_MB`, `SANDBOX_NOFILE`, `SANDBOX_RUNTIME`, `EGRESS_PROXY_URL` (sets `HTTP(S)_PROXY` and `NODE_USE_ENV_PROXY` in the sandbox; unset means no web access), `LLM_PROXY_URL`, `DEFAULT_MODEL`, `SHOW_HARNESS_SIGN_IN`, `DOCKER_SOCKET`, `PORT`.

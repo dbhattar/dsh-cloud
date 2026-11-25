@@ -435,3 +435,32 @@ test('GET /v1/usage: bytes per user over both volumes; ignores other volumes and
     server.close();
   }
 });
+
+test('GET /v1/sandboxes/:id/activity: cumulative CPU and memory of the running container; 404 for none; needs the secret', async () => {
+  const docker = fakeDocker();
+  docker.stats = async (name) => (name === 'dsh-sbx-5' ? { cpuNs: 123456789, memBytes: 2048 } : null);
+  const server = createRunner({ cfg: cfgOf(), docker, log: () => {} });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  try {
+    const url = (id) => `http://127.0.0.1:${server.address().port}/v1/sandboxes/${id}/activity`;
+    const auth = { headers: { authorization: `Bearer ${SECRET}` } };
+    assert.equal((await fetch(url(5))).status, 401);
+    const ok = await fetch(url(5), auth);
+    assert.equal(ok.status, 200);
+    assert.deepEqual(await ok.json(), { cpuNs: 123456789, memBytes: 2048 });
+    assert.equal((await fetch(url(6), auth)).status, 404);
+    assert.equal((await fetch(url('abc'), auth)).status, 400, 'ids are validated');
+    assert.equal((await fetch(url(5), { ...auth, method: 'POST' })).status, 404, 'read-only route');
+  } finally {
+    server.close();
+  }
+});
+
+test('RunnerClient.activity returns the sample and fails with the status on an error', async () => {
+  const calls = [];
+  const fetchImpl = async (url, init) => { calls.push({ url, auth: init.headers.authorization }); return url.endsWith('/9/activity') ? new Response('{"error":"no such sandbox"}', { status: 404 }) : new Response('{"cpuNs":42,"memBytes":7}', { status: 200 }); };
+  const c = new RunnerClient({ url: 'http://runner:8090/', secret: SECRET, fetchImpl });
+  assert.deepEqual(await c.activity(4), { cpuNs: 42, memBytes: 7 });
+  assert.equal(calls[0].url, 'http://runner:8090/v1/sandboxes/4/activity');
+  await assert.rejects(c.activity(9), /404/);
+});

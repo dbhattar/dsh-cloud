@@ -43,6 +43,10 @@ export class RunnerClient {
   async logs(userId, tail = 100) {
     return (await this.#call('GET', `/${userId}/logs?tail=${tail}`)).data.logs;
   }
+  /** { cpuNs, memBytes } of the running container; cpuNs is cumulative CPU time, so callers difference two samples. */
+  async activity(userId) {
+    return (await this.#call('GET', `/${userId}/activity`)).data;
+  }
   /** [{ userId, bytes }]: disk used by each user's two volumes. */
   async diskUsage() {
     const res = await this.fetch(`${this.url}/v1/usage`, { headers: { authorization: `Bearer ${this.secret}` }, signal: AbortSignal.timeout(60000) });
