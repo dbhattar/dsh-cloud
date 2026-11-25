@@ -33,7 +33,7 @@ Working on this repository (people or agents): read [AGENTS.md](AGENTS.md) first
 
 - **On a Mac, with gVisor:** `scripts/lima/setup.sh --stack` creates a Linux VM, installs gVisor and starts the stack with `SANDBOX_RUNTIME=runsc` ([docs/lima-setup.md](docs/lima-setup.md)). `scripts/lima/docker-context.sh` switches `docker` between Docker Desktop and the VM.
 - **Plain Docker (runc):** copy `.env.example` to `.env`, fill in the secrets, build the harness (`scripts/build-harness.sh`), then `scripts/restart.sh`. The agent's shell tool needs gVisor; under runc it fails closed. `restart.sh` chooses the runtime itself (gVisor if the Docker daemon has it, else runc with a warning); `--runtime runsc|runc` forces one and `--print-runtime` shows the choice without changing anything.
-- **Signing up:** create invite codes with `scripts/invite.sh create`, or set `ALLOW_SIGNUP=true`.
+- **Signing up:** create invite links with `scripts/invite.sh create 3 --link` (or bare codes without `--link`), or set `ALLOW_SIGNUP=true`.
 - **Operating it:** `scripts/audit.sh` (audit trail), `scripts/usage.sh` (token usage), `scripts/backup.sh` and `scripts/restore.sh` ([docs/backup.md](docs/backup.md)).
 
 ## Upgrading the harness

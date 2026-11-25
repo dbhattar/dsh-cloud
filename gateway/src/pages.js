@@ -34,8 +34,13 @@ export function appShellPage({ email, src }) {
   return render('DeepSeek Harness', { page: 'shell', email, src });
 }
 
-export function loginPage({ error, allowSignup, inviteRequired = false }) {
-  return render('Sign in', { page: 'login', error, allowSignup: !!allowSignup, inviteRequired: !!inviteRequired });
+/**
+ * Sign-in and sign-up page. `invite` is `{ code, status }` when the page was opened from an invite link or a sign-up failed on
+ * the code; `next` is a vetted path to return to after signing in; `email` refills the form after a failure; `mode` picks which
+ * form leads ('signup' for an invite link).
+ */
+export function loginPage({ error, allowSignup, inviteRequired = false, invite = null, next = null, email = null, mode = 'login' }) {
+  return render('Sign in', { page: 'login', error, allowSignup: !!allowSignup, inviteRequired: !!inviteRequired, invite, next, email, mode });
 }
 
 export const FEEDBACK_KINDS = ['bug', 'idea', 'other'];

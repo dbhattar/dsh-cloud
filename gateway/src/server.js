@@ -1,18 +1,26 @@
 import { readFile } from 'node:fs/promises';
 import http from 'node:http';
 import { Audit } from './audit.js';
-import { MIN_PASSWORD, RateLimiter, hashPassword, normalizeEmail, parseCookies, verifyPassword } from './auth.js';
+import { MIN_PASSWORD, RateLimiter, hashPassword, normalizeEmail, parseCookies, safeNext, verifyPassword } from './auth.js';
 import { FEEDBACK_KINDS, WEB_DIST, appShellPage, feedbackPage, launchingPage, loginPage } from './pages.js';
 import { proxyHttp, proxyUpgrade } from './proxy.js';
 import { usageProblem } from './states.js';
 
 const COOKIE = 'gw_session';
+/** What a sign-up says for each state of an invite code. */
+const INVITE_MESSAGES = {
+  missing: 'Enter your invite code.',
+  unknown: 'That invite code is not valid. Check it for typos, or ask for a new one.',
+  used: 'That invite code has already been used. Ask for a new one.',
+  expired: 'That invite code has expired. Ask for a new one.',
+};
 const ASSET_TYPES = { '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.woff2': 'font/woff2', '.svg': 'image/svg+xml' };
 
 export function createGateway({ cfg, store, manager, log = console.log, audit = new Audit({ store, log }) }) {
   const loginLimiter = new RateLimiter(10, 15 * 60 * 1000);
   const feedbackLimiter = new RateLimiter(10, 60 * 60 * 1000);
   const signupLimiter = new RateLimiter(10, 60 * 60 * 1000);
+  const inviteLookupLimiter = new RateLimiter(30, 60 * 60 * 1000); // checks of an invite link, per address
 
   const clientIp = (req) => (req.headers['x-forwarded-for'] ?? '').split(',')[0].trim() || req.socket.remoteAddress;
   const userOf = (req) => store.userBySession(parseCookies(req.headers.cookie)[COOKIE]);
@@ -73,41 +81,64 @@ export function createGateway({ cfg, store, manager, log = console.log, audit = 
     if (path === '/gw/healthz') return send(res, 200, 'ok', { 'content-type': 'text/plain' });
     if (req.method === 'POST' && !sameOrigin(req)) return send(res, 403, 'Forbidden', { 'content-type': 'text/plain' });
 
-    if (path === '/gw/login' && req.method === 'GET') {
-      if (userOf(req)) return send(res, 303, '', { location: '/' });
-      return send(res, 200, loginPage({ allowSignup: true, inviteRequired: !cfg.allowSignup }));
+    const query = new URL(req.url, 'http://x').searchParams;
+    const loginOptions = { allowSignup: true, inviteRequired: !cfg.allowSignup };
+
+    // Sign-in and sign-up page. /gw/signup?invite=CODE is the link an invite is sent as; ?next=/path is where to go afterwards.
+    if ((path === '/gw/login' || path === '/gw/signup') && req.method === 'GET') {
+      const next = safeNext(query.get('next'));
+      if (userOf(req)) return send(res, 303, '', { location: next ?? '/' });
+      const code = (query.get('invite') ?? '').trim().slice(0, 100);
+      let invite = null;
+      if (code) {
+        const ip = clientIp(req);
+        // Looking up codes is rate limited per address; past the limit nothing is revealed about a code.
+        if (inviteLookupLimiter.blocked(ip)) invite = { code, status: 'unknown' };
+        else {
+          inviteLookupLimiter.fail(ip);
+          invite = { code, status: store.inviteStatus(code) };
+        }
+      }
+      // An invite link that cannot be used says why, above the form; the code stays in the field so it can be corrected.
+      const error = invite && invite.status !== 'valid' ? INVITE_MESSAGES[invite.status] : undefined;
+      return send(res, 200, loginPage({ ...loginOptions, error, invite, next, mode: path === '/gw/signup' || invite ? 'signup' : 'login' }));
     }
     if (path === '/gw/login' && req.method === 'POST') {
       const form = await readForm(req);
       const email = normalizeEmail(form.email);
+      const next = safeNext(form.next);
       const key = `${clientIp(req)}|${email}`;
+      const again = (error) => loginPage({ ...loginOptions, error, next, email: String(form.email ?? '').slice(0, 254) });
       if (loginLimiter.blocked(key)) {
         audit.record('login.fail', { ip: clientIp(req), reason: 'rate_limited', email });
-        return send(res, 429, loginPage({ error: 'Too many attempts. Try again later.', allowSignup: true, inviteRequired: !cfg.allowSignup }));
+        return send(res, 429, again('Too many attempts. Try again later.'));
       }
       const user = email ? store.userByEmail(email) : null;
       const ok = verifyPassword(String(form.password ?? ''), user?.pw_hash);
       if (!user || !ok) {
         loginLimiter.fail(key);
         audit.record('login.fail', { userId: user?.id ?? null, ip: clientIp(req), reason: 'bad_credentials', email });
-        return send(res, 401, loginPage({ error: 'Invalid email or password.', allowSignup: true, inviteRequired: !cfg.allowSignup }));
+        return send(res, 401, again('Invalid email or password.'));
       }
       loginLimiter.reset(key);
       audit.record('login.ok', { userId: user.id, ip: clientIp(req) });
       const token = store.createSession(user.id, cfg.sessionTtlSeconds);
-      return send(res, 303, '', { location: '/', 'set-cookie': sessionCookie(token, cfg.sessionTtlSeconds) });
+      return send(res, 303, '', { location: next ?? '/', 'set-cookie': sessionCookie(token, cfg.sessionTtlSeconds) });
     }
     if (path === '/gw/signup' && req.method === 'POST') {
-      const page = (error) => loginPage({ error, allowSignup: true, inviteRequired: !cfg.allowSignup });
       const ip = clientIp(req);
-      if (signupLimiter.blocked(ip)) {
-        audit.record('signup.fail', { ip, reason: 'rate_limited' });
-        return send(res, 429, page('Too many sign-ups.'));
-      }
       const form = await readForm(req);
       const email = normalizeEmail(form.email);
       const password = String(form.password ?? '');
       const invite = String(form.invite ?? '').trim();
+      const next = safeNext(form.next);
+      // The page shown after a failure keeps what was typed (not the password), and the invite as it was entered.
+      const page = (error) =>
+        loginPage({ ...loginOptions, error, next, email: String(form.email ?? '').slice(0, 254), mode: 'signup', invite: invite ? { code: invite.slice(0, 100), status: store.inviteStatus(invite) } : null });
+      if (signupLimiter.blocked(ip)) {
+        audit.record('signup.fail', { ip, reason: 'rate_limited' });
+        return send(res, 429, page('Too many sign-ups.'));
+      }
       const fail = (msg, reason) => {
         audit.record('signup.fail', { ip, reason, email });
         return send(res, 400, page(msg));
@@ -117,13 +148,16 @@ export function createGateway({ cfg, store, manager, log = console.log, audit = 
         return fail(`Password must be ${MIN_PASSWORD}-200 characters.`, 'weak_password');
       }
       signupLimiter.fail(ip); // every attempt counts, so invite codes cannot be guessed quickly
-      if (!cfg.allowSignup && !store.inviteValid(invite)) return fail('A valid invite code is required.', 'invite_invalid');
+      if (!cfg.allowSignup) {
+        const status = invite ? store.inviteStatus(invite) : 'missing';
+        if (status !== 'valid') return fail(INVITE_MESSAGES[status], status === 'unknown' ? 'invite_invalid' : `invite_${status}`);
+      }
       if (store.userByEmail(email)) return fail('Could not create that account.', 'email_taken');
       const id = cfg.allowSignup ? store.createUser(email, hashPassword(password)) : store.createUserWithInvite(email, hashPassword(password), invite);
-      if (id === null) return fail('A valid invite code is required.', 'invite_invalid');
+      if (id === null) return fail(INVITE_MESSAGES.used, 'invite_used'); // spent by someone else between the check and now
       audit.record('signup.ok', { userId: id, ip, viaInvite: !cfg.allowSignup });
       const token = store.createSession(id, cfg.sessionTtlSeconds);
-      return send(res, 303, '', { location: '/', 'set-cookie': sessionCookie(token, cfg.sessionTtlSeconds) });
+      return send(res, 303, '', { location: next ?? '/', 'set-cookie': sessionCookie(token, cfg.sessionTtlSeconds) });
     }
     if (path === '/gw/logout' && req.method === 'POST') {
       const t = parseCookies(req.headers.cookie)[COOKIE];
@@ -211,7 +245,11 @@ export function createGateway({ cfg, store, manager, log = console.log, audit = 
 
       const user = userOf(req);
       if (!user) {
-        if ((req.headers.accept ?? '').includes('text/html')) return send(res, 303, '', { location: '/gw/login' });
+        if ((req.headers.accept ?? '').includes('text/html')) {
+          // Come back to this page after signing in (page navigations only; never from the workspace frame's own requests).
+          const back = req.method === 'GET' && req.headers['sec-fetch-dest'] !== 'iframe' ? safeNext(req.url) : null;
+          return send(res, 303, '', { location: back ? `/gw/login?next=${encodeURIComponent(back)}` : '/gw/login' });
+        }
         return json(res, 401, { error: 'unauthenticated' });
       }
       manager.touch(user.id);

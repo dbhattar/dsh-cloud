@@ -68,3 +68,17 @@ export class RateLimiter {
     this.hits.delete(key);
   }
 }
+
+/**
+ * A path to send the user to after signing in, or null if it is not safe: same-origin paths only (one leading slash, no
+ * scheme, no host, no backslash or control characters), and never back into the sign-in pages themselves.
+ */
+export function safeNext(value) {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 2000) return null;
+  if (!value.startsWith('/') || value.startsWith('//')) return null;
+  // eslint-disable-next-line no-control-regex
+  if (/[\\\u0000-\u001f\u007f]/.test(value)) return null;
+  const path = value.split(/[?#]/)[0];
+  if (path === '/gw/login' || path === '/gw/signup' || path === '/gw/logout') return null;
+  return value;
+}
