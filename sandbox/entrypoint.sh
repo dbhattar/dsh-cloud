@@ -29,6 +29,14 @@ PATCH=/tmp/dsh-cloud-patch.yml
   echo "      read-only: { sandbox: read-only, approval: ask }"
   echo "      workspace-write: { sandbox: workspace-write, approval: ask }"
 } >> "$PATCH"
+# Default workspace: a new user's first session needs a folder. The harness looks up the OS Documents folder with
+# `xdg-user-dir`, which the slim image does not have, so it failed ("Unable to create default workspace") and the
+# user had to pick a folder by hand. Point it at the persisted workspace volume instead; the harness creates
+# /workspace/deepseek-harness/default-workspace there on first use.
+{
+  echo "- id: workspace-controller"
+  echo "  config: { documentsDirectory: /workspace }"
+} >> "$PATCH"
 # First-run "Preview Notice": mark the current notice version as acknowledged, so new users go straight to the app.
 # The version file is written at image build (sandbox/Dockerfile); without it the notice simply shows.
 WELCOME_VERSION_FILE="${DSH_WELCOME_VERSION_FILE:-/opt/dsh/WELCOME_NOTICE_VERSION}"
