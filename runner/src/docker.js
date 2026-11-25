@@ -71,6 +71,14 @@ export class Docker {
     const r = await this.request('POST', `/networks/${encodeURIComponent(network)}/disconnect`, { Container: containerId, Force: true });
     if (![200, 404].includes(r.status)) throw new Error(`docker network disconnect ${network} -> ${r.status}: ${r.buf.toString().slice(0, 200)}`);
   }
+  /** { cpuNs, memBytes } for a running container (one sample, no waiting), or null if it does not exist. */
+  async stats(name) {
+    const r = await this.request('GET', `/containers/${encodeURIComponent(name)}/stats?stream=false&one-shot=true`);
+    if (r.status === 404) return null;
+    if (r.status !== 200) throw new Error(`docker stats ${name} -> ${r.status}`);
+    const j = JSON.parse(r.buf.toString());
+    return { cpuNs: j.cpu_stats?.cpu_usage?.total_usage ?? null, memBytes: j.memory_stats?.usage ?? null };
+  }
   /** [{ Name, Size }] for every volume (Docker computes sizes on demand, so this can take a few seconds). */
   async volumes() {
     const df = await this.#json('GET', '/system/df?type=volume', undefined, [200]);

@@ -30,6 +30,11 @@ services:
       # Sign-up needs an invite code (scripts/invite.sh) unless ALLOW_SIGNUP=true.
       ALLOW_SIGNUP: ${ALLOW_SIGNUP:-false}
       MAX_RUNNING_SANDBOXES: ${MAX_RUNNING_SANDBOXES:-20} # 0 = unlimited
+      # A sandbox whose agent is busy (model calls or CPU use) stays up with no browser attached, up to this long after
+      # the user's last activity (0 = stop idle sandboxes as before). Idle stop is IDLE_SECONDS.
+      MAX_BUSY_SECONDS: ${MAX_BUSY_SECONDS:-7200}
+      BUSY_CPU_PERCENT: ${BUSY_CPU_PERCENT:-5} # of one CPU, averaged over the reap interval
+      BUSY_SIGNAL_SECONDS: ${BUSY_SIGNAL_SECONDS:-300} # how long a model call or CPU burst keeps counting as busy
       MAX_RUN_SECONDS: ${MAX_RUN_SECONDS:-28800} # continuous run time per sandbox; 0 = unlimited
       MAX_DISK_MB: ${MAX_DISK_MB:-2048} # per user, both volumes; 0 = unlimited
       DISK_CHECK_SECONDS: ${DISK_CHECK_SECONDS:-300}

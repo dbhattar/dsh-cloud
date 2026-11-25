@@ -30,6 +30,10 @@ export class SandboxManager {
     this.held = new Map(); // userId -> why a limit stopped them; only an explicit start (the launching page) clears it
     this.admission = Promise.resolve(); // serialises the capacity check with the start that follows it
     this.lastDiskCheck = 0;
+    this.cpuSample = new Map(); // userId -> { ns, at } previous CPU reading, to compute use between reaps
+    this.lastBusy = new Map(); // userId -> { at, signal } last time the agent looked busy
+    this.keptBusy = new Set(); // userIds currently being kept alive past the idle limit (so the audit line is written once)
+    this.signalWarned = false;
   }
 
   name(userId) {
@@ -210,7 +214,7 @@ export class SandboxManager {
       if (others.length >= max) {
         const minIdle = (this.cfg.evictAfterIdleSeconds ?? 300) * 1000;
         const victim = others
-          .filter((s) => !this.inflight.has(s.userId) && (this.sockets.get(s.userId) ?? 0) === 0 && Date.now() - (this.lastSeen.get(s.userId) ?? 0) >= minIdle)
+          .filter((s) => !this.inflight.has(s.userId) && (this.sockets.get(s.userId) ?? 0) === 0 && !this.isBusy(s.userId) && Date.now() - (this.lastSeen.get(s.userId) ?? 0) >= minIdle)
           .sort((a, b) => (this.lastSeen.get(a.userId) ?? 0) - (this.lastSeen.get(b.userId) ?? 0))[0];
         if (!victim) throw new Error('the service is at capacity right now; try again in a few minutes');
         this.log(`at capacity (${others.length}/${max}): stopping idle sandbox ${victim.userId} to make room for ${userId}`);
@@ -300,20 +304,83 @@ export class SandboxManager {
     this.log(`sandbox ${userId} stopped`);
   }
 
-  /** Stop running sandboxes that have no open sockets and no traffic for idleSeconds. */
+  /** True if the agent in this sandbox looked busy (model call or CPU use) within the last busySignalSeconds. */
+  isBusy(userId) {
+    const b = this.lastBusy.get(userId);
+    return Boolean(b) && Date.now() - b.at <= this.cfg.busySignalSeconds * 1000;
+  }
+
+  /**
+   * Update what we know about which running sandboxes are busy. Two signals, either is enough: the llm-proxy saw a
+   * model request from the user in flight or recently, or the container's CPU use since the previous reap was above
+   * busyCpuPercent of one CPU. Only sandboxes with no browser attached are sampled (the others cannot be stopped
+   * for idleness anyway). A failing signal source is logged once and treated as "no signal", so the worst case is the
+   * old behaviour (an idle sandbox is stopped).
+   */
+  async #sampleBusy(userIds) {
+    if (!this.cfg.maxBusySeconds) return;
+    const now = Date.now();
+    let model = new Map();
+    try {
+      if (this.llm) model = new Map((await this.llm.activity()).users.map((u) => [u.userId, u]));
+    } catch (e) {
+      if (!this.signalWarned) this.log(`busy signal (llm-proxy activity) unavailable: ${e.message}`);
+      this.signalWarned = true;
+    }
+    for (const userId of userIds) {
+      const m = model.get(userId);
+      if (m && (m.inflight > 0 || now - Date.parse(m.lastAt) <= this.cfg.busySignalSeconds * 1000)) {
+        this.lastBusy.set(userId, { at: now, signal: 'model' });
+      }
+      try {
+        const sample = await this.runner.activity(userId);
+        const prev = this.cpuSample.get(userId);
+        this.cpuSample.set(userId, { ns: sample.cpuNs, at: now });
+        if (prev && sample.cpuNs !== null && now > prev.at) {
+          const percent = ((sample.cpuNs - prev.ns) / ((now - prev.at) * 1e6)) * 100; // ns of CPU over ms of wall clock
+          const alreadyModel = this.lastBusy.get(userId)?.at === now; // keep the model tag when both signals fire
+          if (percent >= this.cfg.busyCpuPercent && !alreadyModel) this.lastBusy.set(userId, { at: now, signal: 'cpu' });
+        }
+      } catch (e) {
+        if (!this.signalWarned) this.log(`busy signal (runner activity) unavailable: ${e.message}`);
+        this.signalWarned = true;
+      }
+    }
+  }
+
+  /**
+   * Stop running sandboxes that have no browser attached and no traffic for idleSeconds, unless their agent is busy:
+   * a busy sandbox keeps running until maxBusySeconds after the user's last activity, then is stopped as "busy_cap".
+   */
   async reap() {
     const list = await this.runner.list();
     await this.enforceLimits(list);
-    for (const { userId, running } of list) {
-      if (!running) continue;
-      if (!this.lastSeen.has(userId)) this.touch(userId); // found after gateway restart
-      if (this.inflight.has(userId) || (this.sockets.get(userId) ?? 0) > 0) continue;
-      if (Date.now() - this.lastSeen.get(userId) > this.cfg.idleSeconds * 1000) {
-        try {
-          await this.stop(userId, 'idle');
-        } catch (e) {
-          this.log(`reap ${userId}: ${e.message}`);
+    const detached = list.filter((s) => s.running && !this.inflight.has(s.userId) && (this.sockets.get(s.userId) ?? 0) === 0).map((s) => s.userId);
+    for (const id of detached) if (!this.lastSeen.has(id)) this.touch(id); // found after gateway restart
+    await this.#sampleBusy(detached);
+    const live = new Set(list.filter((s) => s.running).map((s) => s.userId));
+    for (const id of [...this.cpuSample.keys(), ...this.lastBusy.keys(), ...this.keptBusy]) {
+      if (!live.has(id)) { this.cpuSample.delete(id); this.lastBusy.delete(id); this.keptBusy.delete(id); }
+    }
+    for (const userId of detached) {
+      if (Date.now() - this.lastSeen.get(userId) <= this.cfg.idleSeconds * 1000) { this.keptBusy.delete(userId); continue; }
+      const sinceUser = Date.now() - this.lastSeen.get(userId);
+      let by = 'idle';
+      if (this.isBusy(userId)) {
+        if (sinceUser <= this.cfg.maxBusySeconds * 1000) {
+          if (!this.keptBusy.has(userId)) {
+            this.keptBusy.add(userId);
+            this.audit.record('sandbox.kept_busy', { userId, signal: this.lastBusy.get(userId).signal, idleSeconds: Math.round(sinceUser / 1000) });
+          }
+          continue;
         }
+        by = 'busy_cap';
+      }
+      this.keptBusy.delete(userId);
+      try {
+        await this.stop(userId, by);
+      } catch (e) {
+        this.log(`reap ${userId}: ${e.message}`);
       }
     }
   }

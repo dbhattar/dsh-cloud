@@ -31,7 +31,7 @@ Each task is one topic branch and one pull request, with tests and documentation
 
 | Task | Item | What and where | Verify |
 | --- | --- | --- | --- |
-| **P5-1 Busy sandboxes stay up** | 18 | Today `reap()` in `gateway/src/sandbox.js` counts only browser sockets and proxied requests, so a long agent task with the tab closed is stopped after `IDLE_SECONDS`. Add activity signals: the llm-proxy's last model call per user (it already sees every call; expose it on the admin socket), and the runner's view of running processes in the container (to verify: what `docker top` or the cgroup reports under gVisor). Treat a sandbox as busy while either is recent, up to `MAX_BUSY_SECONDS` (new setting) after the last browser activity. | Unit tests for the policy with fake signals; Docker case: a sandbox running a long command and making model calls with no browser connected survives past the idle limit, and is stopped after the cap. |
+| **P5-1 Busy sandboxes stay up** (done, see "P5-1 result") | 18 | Today `reap()` in `gateway/src/sandbox.js` counts only browser sockets and proxied requests, so a long agent task with the tab closed is stopped after `IDLE_SECONDS`. Add activity signals: the llm-proxy's last model call per user (it already sees every call; expose it on the admin socket), and the runner's view of running processes in the container (to verify: what `docker top` or the cgroup reports under gVisor). Treat a sandbox as busy while either is recent, up to `MAX_BUSY_SECONDS` (new setting) after the last browser activity. | Unit tests for the policy with fake signals; Docker case: a sandbox running a long command and making model calls with no browser connected survives past the idle limit, and is stopped after the cap. |
 | **P5-2 Designed states** | 7 | One state model in the gateway for every reason a sandbox is not running or a request is refused: idle stop, run-time stop, disk stop, personal quota, global budget, capacity, harness crash, start failure. Each has a code, a plain title, what happened, what to do, and an action. `/gw/api/status` returns it; the launching page and the shell render it. | Unit tests per state; browser check of each visible state. |
 | **P5-3 Usage and limits panel, stop and restart** | 8, 9 | Extend `/gw/api/usage` with month tokens, storage used and limit (the runner's `/v1/usage`), time left in this run and idle time left. Shell panel with warnings at 80% and 95%; a Restart and a Stop button; a notice before a stop. | Unit tests for the numbers; browser check with a user near each limit. |
 
@@ -59,6 +59,34 @@ Working with repositories with credentials injected at the egress proxy (24); pr
 ## Order and dependencies
 
 P5-1 first (it fixes lost work and P5-8 depends on its signal), then P5-2 and P5-3 (P5-2's states are what P5-3 and P5-10 display). P5-4 and P5-5 can go in parallel with slice 1, since they touch the image and the runner rather than the gateway. P5-6 and P5-7 are independent and small. P5-8 needs P5-1 and a Mailgun sending domain with its DNS records.
+
+## P5-1 result: busy sandboxes stay up
+
+Implemented on `feature/p5-1-busy-sandboxes`. A sandbox with no browser attached used to be stopped after `IDLE_SECONDS` (30 min) even if its agent was mid-task. Now it is kept while the agent looks busy, up to a cap.
+
+**How it decides.** Each reap (every `REAP_INTERVAL_SECONDS`, 30 s) the gateway samples every running sandbox that has no browser socket and no start in flight, and marks it busy if either signal fires:
+- **Model traffic:** the llm-proxy tracks, per user, requests in flight and the end time of the last one (in memory, `llm-proxy/src/activity.js`) and serves them on the admin socket at `GET /admin/activity` (users with a request in flight or one in the last 15 minutes). A request in flight, or one that ended within `BUSY_SIGNAL_SECONDS` (300), counts.
+- **CPU use:** the runner serves `GET /v1/sandboxes/:id/activity` (cumulative CPU nanoseconds and memory from Docker's one-shot stats). The gateway differences two samples; at or above `BUSY_CPU_PERCENT` (5) of one CPU over the interval counts.
+
+A busy signal stays valid for `BUSY_SIGNAL_SECONDS` (300). A sandbox past the idle limit is kept while it is busy and `MAX_BUSY_SECONDS` (7200 in compose, 0 = feature off) has not passed since the user's last activity; after that it is stopped and audited as `sandbox.stop` with `by: busy_cap`. The first keep of an episode is audited once as `sandbox.kept_busy` with the signal (`model` or `cpu`). A busy sandbox is also never chosen for eviction when the service is full. A returning user restarts a capped sandbox normally (it is not a hold). The other limits (`MAX_RUN_SECONDS`, the disk limit) still apply on top.
+
+**Measured** (Lima VM, Docker 29, `runsc` and `runc`, `linux-arm64`, one-shot stats):
+
+| | idle harness | CPU-bound command | process count |
+| --- | --- | --- | --- |
+| `runc` | about 0.06 s of CPU per 5 s (about 1%) | about 1 s per second (100%) | 11 idle, 18 busy: moves |
+| `runsc` | about 0.05 s per 5 s (about 1%) | about 1 s per second (100%) | **43 constant: useless** |
+
+So CPU is the usable signal under gVisor; the process count Docker reports does not move, which is why it is not used. The 5% default sits well above an idle harness (about 1%) and well below any real build or test run.
+
+**Known gaps.**
+- **A busy agent that is only waiting is not detected unless it is calling the model.** A long download, a command blocked on the network, or `sleep` use no CPU and make no model call, so such a sandbox is stopped at the idle limit. Longer `IDLE_SECONDS` or a future signal (open connections, process state) is the remedy.
+- **Model traffic that bypasses the proxy** does not exist today (the proxy is the only route), but any future second route would need to report here too.
+- The activity maps are in memory: a gateway restart forgets the CPU baseline (the first sample after it cannot compute a rate) and an llm-proxy restart forgets recent calls, so for up to a reap or a few minutes a busy sandbox can look idle. The other signal usually covers it; if neither does, the worst case is the old behaviour.
+- The 2 hour default cap is a guess; measure real task lengths and adjust. Each kept sandbox keeps its memory and CPU allocation, which is the cost of the feature; `MAX_RUNNING_SANDBOXES` still bounds the total.
+- Failures of either signal source are logged once and treated as "no signal".
+
+Tests: `tests/gateway/busy.test.mjs` (policy with a mocked clock and fake signals, including a mutation check that they fail when the policy is broken), activity cases in `tests/llm-proxy/unit.test.mjs` and `tests/runner/runner.test.mjs`, and the live suite `tests/phase5/busy.test.mjs` (idle limit 20 s, cap 90 s: an idle sandbox is stopped, CPU-busy and model-busy sandboxes survive, both stop at the cap with the audit rows).
 
 ## Idea list (effort: S under a day, M a few days, L a week or more)
 
