@@ -29,6 +29,21 @@ PATCH=/tmp/dsh-cloud-patch.yml
   echo "      read-only: { sandbox: read-only, approval: ask }"
   echo "      workspace-write: { sandbox: workspace-write, approval: ask }"
 } >> "$PATCH"
+# First-run "Preview Notice": mark the current notice version as acknowledged, so new users go straight to the app.
+# The version file is written at image build (sandbox/Dockerfile); without it the notice simply shows.
+WELCOME_VERSION_FILE="${DSH_WELCOME_VERSION_FILE:-/opt/dsh/WELCOME_NOTICE_VERSION}"
+if [ -r "$WELCOME_VERSION_FILE" ]; then
+  WELCOME_VERSION="$(tr -d '\n' < "$WELCOME_VERSION_FILE")"
+  case "$WELCOME_VERSION" in
+    *[!A-Za-z0-9._-]*|"") ;; # not a plain version string: leave the notice on rather than write odd YAML
+    *)
+      {
+        echo "- id: ui-settings-general"
+        echo "  config: { welcomeNoticeVersion: \"$WELCOME_VERSION\" }"
+      } >> "$PATCH"
+      ;;
+  esac
+fi
 # Model routing: the harness talks to llm-proxy (LLM_BASE_URL) with this user's token (LLM_PROXY_TOKEN).
 # The real provider key is never present in the sandbox.
 if [ -n "${LLM_PROXY_TOKEN:-}" ] && [ -n "${LLM_BASE_URL:-}" ]; then
