@@ -31,3 +31,14 @@ export function loadConfig(env = process.env) {
     sandboxRuntime: runtime,
   };
 }
+
+/**
+ * A warning to log at startup when sandboxes will run under plain runc (or the daemon default, usually runc), or null.
+ * Under runc the harness's shell tool cannot work: user namespaces are denied, so bubblewrap fails, and the Landlock
+ * launcher is not in the image, so the harness refuses to run commands unconfined. gVisor (runsc) is what works.
+ */
+export function runtimeWarning(cfg) {
+  if (cfg.sandboxRuntime && cfg.sandboxRuntime !== 'runc') return null;
+  return 'sandbox runtime is runc: the agent\'s shell tool will not work in sandboxes (the harness refuses to run commands unconfined). '
+    + 'Set SANDBOX_RUNTIME=runsc on a Docker host with gVisor registered (scripts/restart.sh picks it automatically; scripts/lima/setup.sh --stack for a Mac).';
+}

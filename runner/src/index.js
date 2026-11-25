@@ -1,4 +1,4 @@
-import { loadConfig } from './config.js';
+import { loadConfig, runtimeWarning } from './config.js';
 import { Docker } from './docker.js';
 import { Networks } from './network.js';
 import { createRunner } from './server.js';
@@ -6,6 +6,8 @@ import { createRunner } from './server.js';
 const cfg = loadConfig();
 const log = (m) => console.log(`${new Date().toISOString()} ${m}`);
 const docker = new Docker(cfg.dockerSocket);
+const warning = runtimeWarning(cfg);
+if (warning) log(`WARNING: ${warning}`);
 const networks = new Networks({ docker, cfg, log });
 networks.reconcile().catch((e) => log(`initial reconcile: ${e.message}`));
 networks.startReconciler(cfg.reconcileSeconds);

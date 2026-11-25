@@ -464,3 +464,10 @@ test('RunnerClient.activity returns the sample and fails with the status on an e
   assert.equal(calls[0].url, 'http://runner:8090/v1/sandboxes/4/activity');
   await assert.rejects(c.activity(9), /404/);
 });
+
+test('runtime warning: plain runc (or the daemon default) warns that the shell tool will not work; gVisor and others do not', async () => {
+  const { runtimeWarning } = await import('../../runner/src/config.js');
+  for (const rt of ['runc', '']) assert.match(runtimeWarning(cfgOf({ SANDBOX_RUNTIME: rt })), /runc.*shell tool will not work.*SANDBOX_RUNTIME=runsc/s, JSON.stringify(rt));
+  assert.equal(runtimeWarning(cfgOf({})) !== null, true, 'the default is runc, so it warns');
+  for (const rt of ['runsc', 'kata']) assert.equal(runtimeWarning(cfgOf({ SANDBOX_RUNTIME: rt })), null, rt);
+});
