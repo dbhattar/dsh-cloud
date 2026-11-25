@@ -88,3 +88,9 @@ test('preview notice: the Dockerfile extracts the version from the real harness 
   assert.match(version, /^[A-Za-z0-9._-]+$/);
   assert.ok(readFileSync(source, 'utf8').includes(`WELCOME_NOTICE_VERSION = '${version}'`));
 });
+
+// ---- default workspace ----
+test('default workspace: the harness is told to use the workspace volume instead of looking for a Documents folder', () => {
+  const y = patchFor();
+  assert.match(row(y, 'workspace-controller').text, /config: \{ documentsDirectory: \/workspace \}/);
+});
