@@ -79,6 +79,7 @@ Only if the above proves insufficient. Read first: `docs/architecture.md` (Appli
 2. Control plane: auth, user→sandbox mapping, spawn/stop, persistent volumes. **Done.**
 3. LLM proxy with per-user metering and quotas. **Done.**
 4. Hardening: gVisor, egress policy, resource limits, audit logging, abuse controls, backups, pinned builds, CI. **Done** for a Linux host with gVisor; see [plan-phase-4.md](plan-phase-4.md) for what was verified and what is left. A microVM backend (Kata or Firecracker) and a formal sandbox-escape review were not done.
+5. Friendlier experience: first-run polish, clear limits and states, a usable toolbox, work that keeps running. **Draft**, see [plan-phase-5.md](plan-phase-5.md).
 
 ## Verification
 
