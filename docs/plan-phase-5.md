@@ -1,6 +1,6 @@
 # Phase 5: a friendlier dsh-cloud
 
-Status: **draft, scope not yet chosen.** This is the idea list and a suggested first slice; the decisions under "Decisions needed" have to be made before it becomes a task breakdown. Builds on [plan-phase-4.md](plan-phase-4.md), which made the service safe for untrusted users. Parent plan: [plan.md](plan.md).
+Status: **scope chosen (2026-11-25); not started.** The decisions are recorded below and the first slices are broken into tasks. The idea list that follows is the source for later slices. Builds on [plan-phase-4.md](plan-phase-4.md), which made the service safe for untrusted users. Parent plan: [plan.md](plan.md). Working rules: [../AGENTS.md](../AGENTS.md) (one topic branch and PR per task, tests written and run, findings documented, routine steps scripted).
 
 ## Context
 
@@ -12,7 +12,55 @@ What users see today (from `gateway/web/src/pages/*` and `gateway/src/*`):
 - **App shell:** brand, "Today N / 500K tokens", email, sign out, and a banner only for the *personal* quota. No storage use, no time left, no stop button, no warning before a cutoff, and the *global* budget 429 shows up as a raw model error inside the harness.
 - **Inside the harness:** the harness's own UI, unchanged apart from the policy patch: a "Preview" badge, "DSH Local Build 0.2.2-rc.5-2e39e70" in the sidebar, menus for plugins, automation and settings, and no explanation of what this product is, what the limits are, or how to get files in and out.
 
-## Ideas, grouped (effort: S under a day, M a few days, L a week or more)
+## Decisions (2026-11-25)
+
+| Question | Decision | Consequences |
+| --- | --- | --- |
+| Who are the users? | **Developers** | Keep plugins and the terminal. The image needs real developer tooling. Explain limits and policy instead of hiding features. |
+| Main task | **Build software** | Priorities: toolbox and package caches, working with repositories, seeing what the agent builds. File upload and zip export are lower priority (developers have git). |
+| Agent keeps working with the tab closed | **Yes, with a cap** | Model traffic and running processes count as activity, up to a cap (default 2 hours of busy time after the last browser activity). Costs more compute per user; the cap is a setting. |
+| Email | **Mailgun** | Send through Mailgun's HTTP API (`POST https://api.mailgun.net/v3/<domain>/messages`, HTTP basic auth with user `api` and the API key; EU accounts use `api.eu.mailgun.net`), using Node's built-in `fetch`, so the gateway keeps its no-runtime-dependencies rule and needs no SMTP client. Behind a small provider interface (`MAIL_PROVIDER`), with a `log` provider for development and tests. Mailgun needs a **sending domain with DNS records** (SPF and DKIM, verified in Mailgun) for real delivery; a Mailgun sandbox domain only sends to pre-authorised recipients, so it is good for the first manual test and not for users. Plan limits and pricing change: check the current Mailgun terms before launch (not verified here). Settings: `MAILGUN_API_KEY`, `MAILGUN_DOMAIN`, `MAILGUN_REGION` (`us` or `eu`), `MAIL_FROM`. |
+| Identity | email and password; GitHub sign-in later | GitHub sign-in is a later slice and also unlocks private repositories. |
+| Branding, domain, legal pages | open | Not blocking the first slices; needed before a public launch. |
+
+## Task breakdown
+
+Each task is one topic branch and one pull request, with tests and documentation as in [../AGENTS.md](../AGENTS.md). Item numbers refer to the idea list below. "To verify" marks things the plan assumes but has not yet been checked.
+
+### Slice 1: no surprises (work that is not lost, states that explain themselves)
+
+| Task | Item | What and where | Verify |
+| --- | --- | --- | --- |
+| **P5-1 Busy sandboxes stay up** | 18 | Today `reap()` in `gateway/src/sandbox.js` counts only browser sockets and proxied requests, so a long agent task with the tab closed is stopped after `IDLE_SECONDS`. Add activity signals: the llm-proxy's last model call per user (it already sees every call; expose it on the admin socket), and the runner's view of running processes in the container (to verify: what `docker top` or the cgroup reports under gVisor). Treat a sandbox as busy while either is recent, up to `MAX_BUSY_SECONDS` (new setting) after the last browser activity. | Unit tests for the policy with fake signals; Docker case: a sandbox running a long command and making model calls with no browser connected survives past the idle limit, and is stopped after the cap. |
+| **P5-2 Designed states** | 7 | One state model in the gateway for every reason a sandbox is not running or a request is refused: idle stop, run-time stop, disk stop, personal quota, global budget, capacity, harness crash, start failure. Each has a code, a plain title, what happened, what to do, and an action. `/gw/api/status` returns it; the launching page and the shell render it. | Unit tests per state; browser check of each visible state. |
+| **P5-3 Usage and limits panel, stop and restart** | 8, 9 | Extend `/gw/api/usage` with month tokens, storage used and limit (the runner's `/v1/usage`), time left in this run and idle time left. Shell panel with warnings at 80% and 95%; a Restart and a Stop button; a notice before a stop. | Unit tests for the numbers; browser check with a user near each limit. |
+
+### Slice 2: a toolbox that does the job
+
+| Task | Item | What and where | Verify |
+| --- | --- | --- | --- |
+| **P5-4 Developer toolbox** | 22 | First check what the harness build already provides. Then add to `sandbox/Dockerfile`: git, Python 3 with pip and venv, build-essential, curl, jq, ripgrep, unzip, ca-certificates. Keep the root read-only and the image reproducible; record size and build time. | A Docker case that runs `git`, `python3`, a compile and a `pip install` inside the confined shell. |
+| **P5-5 Package caches that persist** | 23 | A per-user cache volume (npm, pip, cargo) with the cache variables set in the entrypoint. **Known pitfall:** the agent's shell can write only its session folder plus configured extra roots, so the cache directory must be added to `sandbox-policy`'s `additionalWritableRoots`; otherwise installs fail inside the confined shell. Add the volume to the runner's spec, the backup list and the disk accounting. | Docker case: install a package twice and see the second one hit the cache; cache survives a restart; backup and restore include it. |
+
+### Slice 3: first-run and access
+
+| Task | Item | What and where | Verify |
+| --- | --- | --- | --- |
+| **P5-6 Our welcome and a curated UI** | 11, 12 | A one-screen welcome (what this is, limits, how work is saved, how to get code out) shown once, delivered through the harness's own first-run slot or the gateway shell (to verify which is feasible by config alone). Hide the build-id string and the harness Sign-in item; relabel the "Preview" badge; friendly model names. Plugins and the terminal stay. | Browser check as a fresh user; entrypoint tests. |
+| **P5-7 Invite links and clearer sign-up** | 1, 2 | `/gw/signup?invite=…`, links printed by `scripts/invite.sh`, redirect back after login, distinct invalid, used and expired messages, show-password. | Unit and browser tests. |
+| **P5-8 Email via Mailgun** | 3, 19 | A mail provider interface in the gateway with a Mailgun implementation (HTTP API) and a `log` provider; password reset, emailed invites, and a "your task finished" notice that uses the P5-1 busy signal. Rate-limit sends per user and per address; never put content, tokens or invite codes in logs, and use single-use expiring reset links. Handle API errors without breaking the request that triggered the mail (queue and retry briefly, then give up and audit). Document the Mailgun setup (domain, DNS records, API key, region) and `.env` settings. | Tests against a fake Mailgun HTTP server (request shape, auth header, failures, retries, no secrets in logs); one real send through the owner's Mailgun domain is a manual step, recorded in the doc. |
+| **P5-9 Waiting room** | 5 | When at capacity, show queue position and start automatically when a slot frees, instead of the refusal. | Docker case on the capacity suite. |
+| **P5-10 Crash watchdog** | 21 | Restart a crashed harness at once and restore the open session; say what happened (uses P5-2). | Docker case: kill the harness and see recovery. |
+
+### Slice 4: what a developer needs next (scope later)
+
+Working with repositories with credentials injected at the egress proxy (24); previewing what the agent builds (25); scheduled tasks that wake the sandbox (20); per-user snapshots (26); GitHub sign-in (29); bring-your-own key (27); account page (4); admin page (16). These get task breakdowns after slice 1 and 2 are in and measured.
+
+## Order and dependencies
+
+P5-1 first (it fixes lost work and P5-8 depends on its signal), then P5-2 and P5-3 (P5-2's states are what P5-3 and P5-10 display). P5-4 and P5-5 can go in parallel with slice 1, since they touch the image and the runner rather than the gateway. P5-6 and P5-7 are independent and small. P5-8 needs P5-1 and a Mailgun sending domain with its DNS records.
+
+## Idea list (effort: S under a day, M a few days, L a week or more)
 
 ### A. Getting in
 1. **Invite links** (S): `/gw/signup?invite=…` prefills the code; `scripts/invite.sh` prints full links. Redirect back to the page the user wanted after login.
@@ -72,27 +120,12 @@ These are gaps in what the product can do. Some come straight from code already 
 33. **Status and incident communication** (S to M): health checks per sandbox, a status page, and a banner when the model provider is failing, so users can tell "my fault" from "service problem".
 34. **Privacy and data rights** (S to M): retention policy, delete-my-data, export, and a plain statement of what is logged (the audit log already excludes content).
 
-## Suggested first slice (highest value for least effort)
+## Open decisions
 
-Two kinds of work belong together: the cheap UI fixes that remove obvious friction, and the capability gaps that stop users finishing a task.
-
-1. **Stop killing busy sandboxes** (18) and **designed states for every refusal and stop**, shown in the shell with usage and storage warnings (7, 8, 9). These fix the two worst surprises: losing work, and not knowing why.
-2. **A baseline toolbox** (22) and **package cache** (23), after checking what the harness build already bundles. Without git and Python the agent fails on ordinary tasks.
-3. **Welcome screen, curated harness UI, friendly model names** (11, 12), as entrypoint patches with browser verification like the last two fixes.
-4. **Invite links, clearer sign-up errors, redirect after login** (1, 2).
-5. **Waiting room for capacity** (5) and **crash recovery** (21).
-6. Then the larger items, chosen by audience: files in and out (10), repositories (24), app preview (25), automation that fires (20), notifications (19). Password reset, the account page and social sign-in (3, 4, 29) once an email or identity provider is chosen.
-
-## Decisions needed before committing to a scope
-
-- **Who the users are** (developers, students, internal staff, general public): decides how much to hide, how much to explain, and whether the terminal and plugins stay.
-- **Email:** is an SMTP provider available? It gates password reset, verification and emailed invites.
-- **What the main task is:** build apps, analyse data, write documents, work on existing repositories? That decides the toolbox (22), repositories (24), app preview (25) and file handling (10).
-- **Long-running work:** should an agent keep working with the tab closed (18, 19, 20)? It costs more compute per user; set a cap.
-- **Identity:** email and password only, or also GitHub or Google sign-in (29)? GitHub sign-in also makes private repositories (24) much easier.
-- **Files in and out:** worth a larger investment now, or after the first slice?
-- **Plugins and the terminal:** should users be able to install plugins or open a terminal, or should the UI be a smaller, guided product?
-- **Branding:** product name, domain and legal pages.
+- **Branding, domain and legal pages** (needed before a public launch).
+- **Busy-time cap value** (the default of two hours is a guess; measure real task lengths first).
+- **How far to curate the harness UI** for developers (P5-6 starts conservative: hide only what is confusing, not features).
+- **Sending domain for Mailgun:** a domain you control and can add DNS records to (SPF, DKIM). It blocks real delivery for P5-8 (not the other tasks), and it overlaps with the branding and domain decision above. Mailgun account region (US or EU) and the `MAIL_FROM` address also need choosing.
 
 ## How each item would be verified
 
@@ -103,4 +136,4 @@ Two kinds of work belong together: the cheap UI fixes that remove obvious fricti
 
 ## Process
 
-Work on topic branches and open PRs (`main` requires them). Once the decisions above are made, record them at the top of this document, turn the first slice into a task breakdown (as phase 4 did), and keep the phase 4 suites green throughout.
+Work on topic branches and open PRs (`main` requires them), one task per branch, following [../AGENTS.md](../AGENTS.md). Keep the phase 4 suites green throughout; every task adds its own tests, and any user-visible change is checked in a real browser. Record findings in this document or a research note as tasks complete, and tick tasks off in the task tables.
