@@ -5,11 +5,16 @@
 #                                      volumes. Touches no live data; safe on a running stack. This is what
 #                                      backup.sh runs after every backup.
 #   scripts/restore.sh --yes DIR       REPLACE the live databases and volumes with the backup. The stack must be
-#                                      stopped first (docker compose ... down); user sandboxes must not be running.
+#                                      stopped first (docker compose ... down); user sandboxes must not be running
+#                                      when the backup holds their volumes. File ownership is restored too (see below).
 #
 # What --check verifies: every file's sha256 and size against the manifest; each database opens, passes SQLite's
 # integrity_check and has the same row count in every table as at backup time; each archive extracts and holds the
 # same number of files. It does not boot the stack from the restored data.
+#
+# Ownership: each database gets back the owner (uid:gid) the manifest recorded; for older backups, the owner the volume already
+# has if it is not root, else the service's default (llm-proxy 1000:1000, gateway root). Without this, a restore into a volume
+# that did not exist leaves it root-owned and the llm-proxy, which runs as `node`, cannot write its database and exits.
 set -eu
 sha256() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$@"; else shasum -a 256 "$@"; fi; }
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -81,17 +86,34 @@ if [ "$MODE" = check ]; then
 fi
 
 # --- real restore ---
-RUNNING="$(docker ps -q --filter "label=com.docker.compose.project=$PROJECT"; docker ps -q --filter label=dsh-cloud.user)"
+# The stack holds the databases open, so it must be down. User sandboxes only matter when the backup replaces their volumes.
+HAS_VOLUMES=0
+for f in "$DIR"/volumes/*.tar.gz; do [ -f "$f" ] && HAS_VOLUMES=1; done
+RUNNING="$(docker ps -q --filter "label=com.docker.compose.project=$PROJECT")"
+[ "$HAS_VOLUMES" = 0 ] || RUNNING="$RUNNING$(docker ps -q --filter label=dsh-cloud.user)"
 [ -z "$RUNNING" ] || { echo "the stack or a user sandbox is running. Stop it first:  docker compose --env-file .env -f infra/docker-compose.gateway.yml down  (and docker rm -f any dsh-sbx-*)" >&2; exit 1; }
 [ "$FAIL" = 0 ] || { echo "the backup failed its checksum check; not restoring" >&2; exit 1; }
 echo "==> restoring databases"
+# uid:gid, digits only (the manifest is data, never interpolated unchecked into a command).
+valid_owner() { case "$1" in ''|*[!0-9:]*|:*|*:|*:*:*) return 1 ;; *) return 0 ;; esac; }
+# What the service in each image runs as, for backups made before the manifest recorded owners.
+default_owner() { case "$1" in llm-proxy) echo 1000:1000 ;; *) echo 0:0 ;; esac; }
 for db in gateway llm-proxy; do
   [ -f "$DIR/$db.db" ] || continue
   vol="${PROJECT}_${db}-data"
   docker volume create "$vol" >/dev/null
+  # Ownership matters: a volume created here is root-owned, and the llm-proxy runs as `node` and could not write its database.
+  # Order of preference: what the backup recorded; else the owner the volume already has (if not root); else the service's default.
+  file_owner="$(manifest_get "owner.$db")"; valid_owner "$file_owner" || file_owner=""
+  dir_owner="$(manifest_get "dirowner.$db")"; valid_owner "$dir_owner" || dir_owner=""
+  if [ -z "$file_owner" ]; then
+    existing="$(docker run --rm -v "$vol:/data:ro" "$IMG" stat -c %u:%g /data)"
+    if [ "$existing" != "0:0" ]; then file_owner="$existing"; else file_owner="$(default_owner "$db")"; fi
+  fi
+  [ -n "$dir_owner" ] || dir_owner="$file_owner"
   # Remove the old WAL files too: leftovers from the replaced database would corrupt the restored one.
-  docker run --rm -i -v "$vol:/data" "$IMG" sh -c "rm -f /data/$db.db /data/$db.db-wal /data/$db.db-shm; cat > /data/$db.db; chown \$(stat -c %u:%g /data) /data/$db.db" < "$DIR/$db.db"
-  echo "   $db.db -> $vol"
+  docker run --rm -i -v "$vol:/data" "$IMG" sh -c "rm -f /data/$db.db /data/$db.db-wal /data/$db.db-shm; cat > /data/$db.db; chown $dir_owner /data; chown $file_owner /data/$db.db" < "$DIR/$db.db"
+  echo "   $db.db -> $vol (owner $file_owner)"
 done
 echo "==> restoring volumes"
 for f in "$DIR"/volumes/*.tar.gz; do

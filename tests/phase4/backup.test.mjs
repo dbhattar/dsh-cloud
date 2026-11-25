@@ -58,6 +58,9 @@ test('backup.sh writes both databases, every user volume and a manifest, and its
   for (const f of ['gateway.db', 'llm-proxy.db', 'MANIFEST', `volumes/dsh-data-${users.a.id}.tar.gz`, `volumes/dsh-ws-${users.a.id}.tar.gz`]) assert.ok(existsSync(join(backupDir, f)), f);
   const manifest = readFileSync(join(backupDir, 'MANIFEST'), 'utf8');
   assert.match(manifest, new RegExp(`counts\\.gateway=\\{"integrity":"ok","tables":\\{.*"users":[1-9]`));
+  assert.match(manifest, /^owner\.llm-proxy=1000:1000$/m, 'who owns the data is recorded, so a restore into a new volume can give it back');
+  assert.match(manifest, /^owner\.gateway=\d+:\d+$/m);
+  assert.ok(!existsSync(join(backupDir, '.owners')), 'no temporary file left behind');
   assert.ok(!manifest.includes('test-password-123'));
 });
 
