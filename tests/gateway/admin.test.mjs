@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
-import { adminRoutes } from '../../gateway/src/admin.js';
+import { adminRoutes, samplePath } from '../../gateway/src/admin.js';
 import { loadConfig } from '../../gateway/src/config.js';
 import { Store } from '../../gateway/src/db.js';
 import { SandboxManager } from '../../gateway/src/sandbox.js';
@@ -67,28 +67,30 @@ async function gateway() {
       req.on('error', reject);
       req.end();
     });
-  return { store, ids, call, close: () => { server.closeAllConnections(); server.close(); } };
+  return { store, ids, call, usersStub: {}, close: () => { server.closeAllConnections(); server.close(); } };
 }
 
 test('guard: every admin route refuses a signed-out visitor and an ordinary user, and serves an admin', async () => {
   const g = await gateway();
   try {
-    const routes = adminRoutes({ store: g.store });
-    assert.ok(routes.length >= 3, 'the table has the routes');
+    const routes = adminRoutes({ store: g.store, users: g.usersStub });
+    assert.ok(routes.length >= 10, 'the table has the routes, including the account pages and actions');
+    assert.ok(routes.some((r) => r.method === 'POST') && routes.some((r) => r.path.includes(':id')));
     for (const r of routes) {
-      const anon = await g.call('anon', r.method, r.path);
+      const path = samplePath(r);
+      const anon = await g.call('anon', r.method, path, { headers: { 'x-csrf-token': 'x' } });
       if (r.page) {
-        assert.equal(anon.status, 303, `${r.path} signed out`);
-        assert.equal(anon.headers.location, `/gw/login?next=${encodeURIComponent(r.path)}`);
-      } else assert.equal(anon.status, 401, `${r.path} signed out`);
-      const user = await g.call('user', r.method, r.path);
-      assert.equal(user.status, 404, `${r.path} as an ordinary user looks like it does not exist`);
+        assert.equal(anon.status, 303, `${path} signed out`);
+        assert.equal(anon.headers.location, `/gw/login?next=${encodeURIComponent(path)}`);
+      } else assert.equal(anon.status, 401, `${r.method} ${path} signed out`);
+      const user = await g.call('user', r.method, path, { headers: { 'x-csrf-token': 'x' } });
+      assert.equal(user.status, 404, `${r.method} ${path} as an ordinary user looks like it does not exist`);
       assert.ok(!/admin/i.test(user.text.replace(/\/gw\/admin/g, '')) || user.text === 'Not found', 'nothing about the panel is revealed');
-      const admin = await g.call('admin', r.method, r.path);
-      assert.equal(admin.status, 200, `${r.path} as an admin`);
+      const admin = await g.call('admin', r.method, path);
+      assert.equal(admin.status, r.method === 'GET' ? 200 : 403, `${r.method} ${path} as an admin (a change needs the CSRF token)`);
     }
     // Paths that are not in the table: the same answers, so nothing tells the two apart for an ordinary user.
-    for (const path of ['/gw/admin/', '/gw/admin/api/users', '/gw/admin/api', '/gw/admin/../me', '/gw/admin/api/me/extra']) {
+    for (const path of ['/gw/admin/', '/gw/admin/api/users/abc', '/gw/admin/api/users/1/delete', '/gw/admin/api/users/1234567890', '/gw/admin/api/nothing', '/gw/admin/api', '/gw/admin/../me', '/gw/admin/api/me/extra']) {
       assert.equal((await g.call('user', 'GET', path)).status, 404, path);
       assert.equal((await g.call('anon', 'GET', path)).status, 401, path);
       assert.equal((await g.call('admin', 'GET', path)).status, 404, `${path} (an admin gets "not found" too)`);
@@ -120,7 +122,8 @@ test('the panel is never framed and is not cached; the page and its data are wha
     assert.equal(page.headers['x-frame-options'], 'DENY');
     assert.equal(page.headers['cache-control'], 'no-store');
     const boot = JSON.parse(/<script id="gw-boot" type="application\/json">(.*?)<\/script>/s.exec(page.text)[1]);
-    assert.deepEqual(boot, { page: 'admin', email: 'admin@example.com' });
+    assert.deepEqual({ ...boot, csrf: undefined }, { page: 'admin', email: 'admin@example.com', csrf: undefined });
+    assert.match(boot.csrf, /^[0-9a-f]{64}$/, 'the page carries the token its actions send back');
     const me = JSON.parse((await g.call('admin', 'GET', '/gw/admin/api/me')).text);
     assert.deepEqual(me, { id: g.ids.admin, email: 'admin@example.com' });
     assert.equal((await g.call('admin', 'GET', '/gw/admin/api/me')).headers['x-frame-options'], 'DENY');

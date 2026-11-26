@@ -44,8 +44,8 @@ export function loginPage({ error, allowSignup, inviteRequired = false, invite =
 }
 
 /** The admin panel (/gw/admin), served only to admins; see admin.js. */
-export function adminPage({ email }) {
-  return render('Admin', { page: 'admin', email });
+export function adminPage({ email, csrf = '' }) {
+  return render('Admin', { page: 'admin', email, csrf });
 }
 
 export const FEEDBACK_KINDS = ['bug', 'idea', 'other'];

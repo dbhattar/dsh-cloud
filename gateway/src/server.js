@@ -50,7 +50,32 @@ export function createGateway({ cfg, store, manager, log = console.log, audit = 
   }
   const json = (res, status, obj) => send(res, status, JSON.stringify(obj), { 'content-type': 'application/json' });
 
-  const handleAdmin = createAdminHandler({ store, cfg, manager, audit, userOf, clientIp, send, json });
+  const handleAdmin = createAdminHandler({ store, cfg, manager, audit, userOf, clientIp, send, json, sessionToken: (req) => parseCookies(req.headers.cookie)[COOKIE], readJson, log });
+
+  /** A small JSON request body (the admin actions); rejects with status 400 when it is not JSON. */
+  function readJson(req) {
+    return new Promise((resolve, reject) => {
+      let size = 0;
+      const chunks = [];
+      const bad = () => reject(Object.assign(new Error('bad body'), { status: 400 }));
+      req.on('data', (c) => {
+        size += c.length;
+        if (size > 4096) {
+          bad();
+          req.destroy();
+        } else chunks.push(c);
+      });
+      req.on('end', () => {
+        try {
+          const text = Buffer.concat(chunks).toString();
+          resolve(text ? JSON.parse(text) : {});
+        } catch {
+          bad();
+        }
+      });
+      req.on('error', bad);
+    });
+  }
 
   function readForm(req) {
     return new Promise((resolve, reject) => {
@@ -122,6 +147,11 @@ export function createGateway({ cfg, store, manager, log = console.log, audit = 
         loginLimiter.fail(key);
         audit.record('login.fail', { userId: user?.id ?? null, ip: clientIp(req), reason: 'bad_credentials', email });
         return send(res, 401, again('Invalid email or password.'));
+      }
+      // Said only after the right password, so it does not confirm that an address has an account.
+      if (user.suspended_at) {
+        audit.record('login.fail', { userId: user.id, ip: clientIp(req), reason: 'suspended' });
+        return send(res, 403, again('This account has been suspended. If you think that is a mistake, contact whoever invited you.'));
       }
       loginLimiter.reset(key);
       audit.record('login.ok', { userId: user.id, ip: clientIp(req) });
