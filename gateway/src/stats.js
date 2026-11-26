@@ -130,6 +130,6 @@ export function createOverview({ store, manager, cfg, now = () => Date.now(), da
       })(),
     };
 
-    return { generatedAt: new Date(t).toISOString(), users, sandboxes, tokens, storage, activity, readiness, health, feedbackCount: store.feedbackCount() };
+    return { generatedAt: new Date(t).toISOString(), users, sandboxes, tokens, storage, activity, readiness, health, feedback: store.feedbackCounts() };
   };
 }

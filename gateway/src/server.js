@@ -14,6 +14,7 @@ const INVITE_MESSAGES = {
   unknown: 'That invite code is not valid. Check it for typos, or ask for a new one.',
   used: 'That invite code has already been used. Ask for a new one.',
   expired: 'That invite code has expired. Ask for a new one.',
+  revoked: 'That invite is no longer valid. Ask for a new one.',
 };
 const ASSET_TYPES = { '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.woff2': 'font/woff2', '.svg': 'image/svg+xml' };
 

@@ -17,7 +17,7 @@ interface Overview {
   activity: Section<{ day: Activity; week: Activity }>;
   readiness: Section<{ all: Split; resumed: Split; fresh: Split }>;
   health: { runner: Check; llmProxy: Check | null; dataDisk: Check };
-  feedbackCount: number;
+  feedback: { total: number; unread: number };
 }
 
 const counts = (m: Record<string, number>) => { const e = Object.entries(m); return e.length ? e.map(([k, v]) => `${k.replace(/_/g, ' ')} ${v}`).join(', ') : '–'; };
@@ -175,7 +175,7 @@ function OverviewBody({ o }: { o: Overview }) {
         <Health label="Model proxy" c={o.health.llmProxy} />
         <Health label="Gateway data disk" c={o.health.dataDisk} disk />
       </ul>
-      <p className={styles.lead}>{plural(o.feedbackCount, 'piece', 'pieces')} of feedback received so far.</p>
+      <p className={styles.lead}>{plural(o.feedback.total, 'piece', 'pieces')} of feedback received so far{o.feedback.unread > 0 ? <>, <a href="/gw/admin/feedback">{o.feedback.unread} unread</a></> : ''}.</p>
     </>
   );
 }
@@ -230,7 +230,7 @@ export function OverviewPage() {
               </tbody>
             </table>
           )}
-          {events !== null && events.length > 10 && <p className={styles.empty}>Showing the latest 10 of {events.length}. The full log is in the audit search (coming with the invites and audit page).</p>}
+          {events !== null && events.length > 10 && <p className={styles.empty}>Showing the latest 10 of {events.length}. The rest is in the <a href="/gw/admin/audit?event=admin.&since=all">audit search</a>.</p>}
           <p className={styles.note}>Admins can see accounts, usage and audit rows. They cannot see the content of anyone's workspace, sessions or messages, and there is no way to sign in as another user.</p>
     </>
   );

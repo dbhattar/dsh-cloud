@@ -1,4 +1,5 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createRecordsApi } from './admin-records.js';
 import { createUsersApi } from './admin-users.js';
 import { adminPage } from './pages.js';
 import { createOverview } from './stats.js';
@@ -22,12 +23,15 @@ const ADMIN_HEADERS = { 'content-security-policy': "frame-ancestors 'none'", 'x-
 const ACTIONS = ['stop', 'restart', 'signout', 'suspend', 'unsuspend'];
 
 /** The route table. `users` is the accounts API (admin-users.js). */
-export function adminRoutes({ store, overview = async () => ({}), users = null }) {
+export function adminRoutes({ store, overview = async () => ({}), users = null, records = null }) {
   const page = (path) => ({ method: 'GET', path, page: true, handle: ({ admin, csrf }) => ({ html: adminPage({ email: admin.email, csrf }) }) });
   const routes = [
     page('/gw/admin'),
     page('/gw/admin/users'),
     page('/gw/admin/users/:id'),
+    page('/gw/admin/invites'),
+    page('/gw/admin/feedback'),
+    page('/gw/admin/audit'),
     { method: 'GET', path: '/gw/admin/api/me', handle: ({ admin }) => ({ json: { id: admin.id, email: admin.email } }) },
     // The numbers on the overview page, each section gathered on its own (stats.js).
     { method: 'GET', path: '/gw/admin/api/overview', handle: async () => ({ json: await overview() }) },
@@ -63,13 +67,27 @@ export function adminRoutes({ store, overview = async () => ({}), users = null }
       })),
     );
   }
+  if (records) {
+    routes.push(
+      { method: 'GET', path: '/gw/admin/api/invites', handle: () => ({ json: records.invites.list() }) },
+      { method: 'POST', path: '/gw/admin/api/invites', handle: async ({ admin, body, ip }) => records.invites.create({ ...(await body()), admin, ip }) },
+      { method: 'POST', path: '/gw/admin/api/invites/:ref/revoke', handle: ({ params, admin, ip }) => records.invites.revoke({ ref: params.ref, admin, ip }) },
+      { method: 'GET', path: '/gw/admin/api/feedback', handle: ({ query }) => ({ json: records.feedback.list({ status: query.get('status'), page: query.get('page') }) }) },
+      { method: 'POST', path: '/gw/admin/api/feedback/:id/read', handle: async ({ params, admin, body, ip }) => records.feedback.mark({ id: params.id, read: (await body()).read, admin, ip }) },
+      { method: 'GET', path: '/gw/admin/api/audit/search', handle: ({ query }) => records.audit.search(query) },
+      { method: 'GET', path: '/gw/admin/api/audit/export', handle: ({ query, admin, ip }) => records.audit.export(query, { admin, ip }) },
+    );
+  }
   return routes;
 }
 
 /** A path from the table with `:id` filled in, for tests and for matching. */
-export const samplePath = (route) => route.path.replace(':id', '1');
+export const samplePath = (route) => route.path.replace(':id', '1').replace(':ref', 'aaaaaaaaaaaa');
 
-const matcher = (route) => new RegExp(`^${route.path.replace(':id', '(\\d{1,9})')}$`);
+/** `:id` is an account or feedback number, `:ref` an invite's 12-character id; anything else does not match. */
+const PARAM = { ':id': '(\\d{1,9})', ':ref': '([0-9a-f]{12})' };
+const matcher = (route) => new RegExp(`^${route.path.replace(/:(id|ref)/g, (m) => PARAM[m])}$`);
+const paramNames = (route) => [...route.path.matchAll(/:(id|ref)/g)].map((m) => m[1]);
 
 /**
  * Guard and dispatch. `send` and `json` are the gateway's response helpers.
@@ -79,7 +97,8 @@ const matcher = (route) => new RegExp(`^${route.path.replace(':id', '(\\d{1,9})'
  */
 export function createAdminHandler({ store, cfg, manager, audit, userOf, clientIp, send, json, sessionToken, readJson, log = () => {} }) {
   const users = createUsersApi({ store, manager, audit, log });
-  const routes = adminRoutes({ store, overview: createOverview({ store, manager, cfg }), users }).map((r) => ({ ...r, re: matcher(r) }));
+  const records = createRecordsApi({ store, cfg, audit });
+  const routes = adminRoutes({ store, overview: createOverview({ store, manager, cfg }), users, records }).map((r) => ({ ...r, re: matcher(r), names: paramNames(r) }));
   const secret = randomBytes(32); // per process: a restart makes open admin pages reload once to get a new token
   const csrfFor = (req) => createHmac('sha256', secret).update(String(sessionToken(req) ?? '')).digest('hex');
 
@@ -105,7 +124,7 @@ export function createAdminHandler({ store, cfg, manager, audit, userOf, clientI
         return json(res, 403, { error: 'csrf', message: 'This page is out of date. Reload it and try again.' });
       }
     }
-    const params = { id: hit.m[1] === undefined ? undefined : Number(hit.m[1]) };
+    const params = Object.fromEntries((route.names ?? []).map((n, i) => [n, n === 'id' ? Number(hit.m[i + 1]) : hit.m[i + 1]]));
     let bodyPromise;
     const body = () => (bodyPromise ??= readJson(req));
     let out;
@@ -117,6 +136,7 @@ export function createAdminHandler({ store, cfg, manager, audit, userOf, clientI
       return json(res, 500, { error: 'internal', message: 'Something went wrong. Check the gateway log.' });
     }
     if (out.html !== undefined) return send(res, 200, out.html, ADMIN_HEADERS);
+    if (out.raw) return send(res, 200, out.raw.body, { ...ADMIN_HEADERS, 'content-type': out.raw.type, 'content-disposition': `attachment; filename="${out.raw.filename}"` });
     return send(res, out.status ?? 200, JSON.stringify(out.json), { ...ADMIN_HEADERS, 'content-type': 'application/json' });
   };
 }

@@ -54,15 +54,21 @@ export class Store {
     const columns = this.db.prepare('PRAGMA table_info(users)').all().map((c) => c.name);
     if (!columns.includes('welcomed_at')) this.db.exec('ALTER TABLE users ADD COLUMN welcomed_at INTEGER');
     if (!columns.includes('is_admin')) this.db.exec('ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0');
+    const inviteColumns = this.db.prepare('PRAGMA table_info(invites)').all().map((c) => c.name);
+    if (!inviteColumns.includes('revoked_at')) this.db.exec('ALTER TABLE invites ADD COLUMN revoked_at INTEGER');
+    if (!inviteColumns.includes('created_by')) this.db.exec('ALTER TABLE invites ADD COLUMN created_by INTEGER');
+    const feedbackColumns = this.db.prepare('PRAGMA table_info(feedback)').all().map((c) => c.name);
+    if (!feedbackColumns.includes('read_at')) this.db.exec('ALTER TABLE feedback ADD COLUMN read_at INTEGER');
     if (!columns.includes('suspended_at')) this.db.exec('ALTER TABLE users ADD COLUMN suspended_at INTEGER');
   }
   addAudit({ ts = Date.now(), event, userId = null, ip = null, detail = {} }) {
     this.db.prepare('INSERT INTO audit (ts, event, user_id, ip, detail) VALUES (?, ?, ?, ?, ?)').run(ts, event, userId, ip, JSON.stringify(detail));
   }
   /** Newest first. `event` matches exactly, or as a prefix when it ends in "." or "*" ("sandbox." / "login*"). */
-  queryAudit({ userId, event, since, limit = 100 } = {}) {
+  queryAudit({ userId, event, since, limit = 100, beforeId, maxLimit = 1000 } = {}) {
     const where = [];
     const args = [];
+    if (beforeId !== undefined) (where.push('id < ?'), args.push(beforeId));
     if (userId !== undefined) (where.push('user_id = ?'), args.push(userId));
     if (event) {
       const prefix = /[.*]$/.test(event);
@@ -71,9 +77,9 @@ export class Store {
     }
     if (since) (where.push('ts >= ?'), args.push(since));
     const rows = this.db
-      .prepare(`SELECT ts, event, user_id, ip, detail FROM audit ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY id DESC LIMIT ?`)
-      .all(...args, Math.min(1000, Math.max(1, limit)));
-    return rows.map((r) => ({ ts: r.ts, event: r.event, userId: r.user_id, ip: r.ip, detail: JSON.parse(r.detail) }));
+      .prepare(`SELECT id, ts, event, user_id, ip, detail FROM audit ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY id DESC LIMIT ?`)
+      .all(...args, Math.min(maxLimit, Math.max(1, limit)));
+    return rows.map((r) => ({ id: Number(r.id), ts: r.ts, event: r.event, userId: r.user_id, ip: r.ip, detail: JSON.parse(r.detail) }));
   }
   // ---- aggregates for the admin overview (counts only; nothing here reads content) ----
   /** { total, admins, newSince(ts) }: accounts and how many were created since each given time. */
@@ -104,9 +110,6 @@ export class Store {
       .filter((r) => Number.isFinite(r.ms))
       .map((r) => ({ ms: Number(r.ms), resumed: r.resumed === 1 || r.resumed === true }));
   }
-  feedbackCount() {
-    return Number(this.db.prepare('SELECT COUNT(*) AS n FROM feedback').get().n);
-  }
   purgeAudit(before) {
     this.db.prepare('DELETE FROM audit WHERE ts < ?').run(before);
   }
@@ -119,27 +122,28 @@ export class Store {
     this.db.prepare('UPDATE users SET welcomed_at = ? WHERE id = ? AND welcomed_at IS NULL').run(now, userId);
   }
   /** New single-use invite code (stored hashed; the plaintext is returned once). */
-  createInvite({ note = '', ttlDays = 0 } = {}, now = Date.now()) {
+  createInvite({ note = '', ttlDays = 0, createdBy = null } = {}, now = Date.now()) {
     const code = `inv_${randomBytes(12).toString('base64url')}`;
     this.db
-      .prepare('INSERT INTO invites (code_hash, note, created_at, expires_at) VALUES (?, ?, ?, ?)')
-      .run(hashToken(code), note, now, ttlDays > 0 ? now + ttlDays * 86400000 : null);
+      .prepare('INSERT INTO invites (code_hash, note, created_at, expires_at, created_by) VALUES (?, ?, ?, ?, ?)')
+      .run(hashToken(code), note, now, ttlDays > 0 ? now + ttlDays * 86400000 : null, createdBy);
     return code;
   }
-  /** 'valid', 'used', 'expired' or 'unknown' (never seen, or empty). Only the hash of a code is stored. */
+  /** 'valid', 'used', 'revoked', 'expired' or 'unknown' (never seen, or empty). Only the hash of a code is stored. */
   inviteStatus(code, now = Date.now()) {
     if (typeof code !== 'string' || !code.trim()) return 'unknown';
-    const r = this.db.prepare('SELECT used_by, expires_at FROM invites WHERE code_hash = ?').get(hashToken(code.trim()));
+    const r = this.db.prepare('SELECT used_by, expires_at, revoked_at FROM invites WHERE code_hash = ?').get(hashToken(code.trim()));
     if (!r) return 'unknown';
     if (r.used_by !== null) return 'used';
+    if (r.revoked_at !== null) return 'revoked';
     if (r.expires_at !== null && r.expires_at <= now) return 'expired';
     return 'valid';
   }
   /** True if the code exists, is unused and has not expired. */
   inviteValid(code, now = Date.now()) {
     if (typeof code !== 'string' || !code) return false;
-    const r = this.db.prepare('SELECT used_by, expires_at FROM invites WHERE code_hash = ?').get(hashToken(code.trim()));
-    return Boolean(r) && r.used_by === null && (r.expires_at === null || r.expires_at > now);
+    const r = this.db.prepare('SELECT used_by, expires_at, revoked_at FROM invites WHERE code_hash = ?').get(hashToken(code.trim()));
+    return Boolean(r) && r.used_by === null && r.revoked_at === null && (r.expires_at === null || r.expires_at > now);
   }
   /**
    * Create the user and spend the invite in one transaction, so a code works for exactly one account even
@@ -161,11 +165,40 @@ export class Store {
       throw e;
     }
   }
-  /** [{ note, createdAt, expiresAt, usedBy, usedAt }] without the codes (only hashes are stored). */
-  listInvites() {
-    return this.db.prepare('SELECT note, created_at, expires_at, used_by, used_at FROM invites ORDER BY created_at').all().map((r) => ({
-      note: r.note, createdAt: r.created_at, expiresAt: r.expires_at, usedBy: r.used_by, usedAt: r.used_at,
-    }));
+  /**
+   * Every invite, oldest first, without the codes (only hashes are stored). `id` is the first 12 characters of the stored hash: it
+   * names the invite for revoking and reveals nothing about the code. `status` is valid, used, revoked or expired.
+   */
+  listInvites(now = Date.now()) {
+    return this.db
+      .prepare(
+        `SELECT i.code_hash, i.note, i.created_at, i.expires_at, i.used_by, i.used_at, i.revoked_at, i.created_by, u.email AS used_by_email
+         FROM invites i LEFT JOIN users u ON u.id = i.used_by ORDER BY i.created_at, i.rowid`,
+      )
+      .all()
+      .map((r) => ({
+        id: r.code_hash.slice(0, 12),
+        note: r.note,
+        createdAt: r.created_at,
+        expiresAt: r.expires_at,
+        usedBy: r.used_by,
+        usedByEmail: r.used_by_email ?? null,
+        usedAt: r.used_at,
+        revokedAt: r.revoked_at,
+        createdBy: r.created_by,
+        status: r.used_by !== null ? 'used' : r.revoked_at !== null ? 'revoked' : r.expires_at !== null && r.expires_at <= now ? 'expired' : 'valid',
+      }));
+  }
+  /** Revoke an unused invite by its id. Returns 'revoked', 'used', 'already', or null when there is no such invite. */
+  revokeInvite(ref, now = Date.now()) {
+    if (!/^[0-9a-f]{12}$/.test(ref ?? '')) return null;
+    const rows = this.db.prepare("SELECT code_hash, used_by, revoked_at FROM invites WHERE code_hash LIKE ? || '%'").all(ref);
+    if (rows.length !== 1) return null;
+    const r = rows[0];
+    if (r.used_by !== null) return 'used';
+    if (r.revoked_at !== null) return 'already';
+    this.db.prepare('UPDATE invites SET revoked_at = ? WHERE code_hash = ?').run(now, r.code_hash);
+    return 'revoked';
   }
   createUser(email, pwHash) {
     const r = this.db
@@ -253,6 +286,24 @@ export class Store {
   /** End every session of a user ("sign out everywhere"). Returns how many there were. */
   deleteSessionsFor(userId) {
     return this.db.prepare('DELETE FROM sessions WHERE user_id = ?').run(userId).changes;
+  }
+  /** Feedback for the admin inbox, newest first, with who sent it. `unreadOnly` hides what an admin has marked read. */
+  listFeedback({ unreadOnly = false, limit = 25, offset = 0 } = {}) {
+    const where = unreadOnly ? 'WHERE f.read_at IS NULL' : '';
+    const total = Number(this.db.prepare(`SELECT COUNT(*) AS n FROM feedback f ${where}`).get().n);
+    const rows = this.db
+      .prepare(`SELECT f.id, f.user_id, u.email, f.kind, f.message, f.created_at, f.read_at FROM feedback f LEFT JOIN users u ON u.id = f.user_id ${where} ORDER BY f.id DESC LIMIT ? OFFSET ?`)
+      .all(Math.min(100, Math.max(1, limit)), Math.max(0, offset))
+      .map((f) => ({ id: Number(f.id), userId: Number(f.user_id), email: f.email ?? null, kind: f.kind, message: f.message, createdAt: f.created_at, readAt: f.read_at ?? null }));
+    return { rows, total };
+  }
+  feedbackCounts() {
+    const one = (sql) => Number(this.db.prepare(sql).get().n);
+    return { total: one('SELECT COUNT(*) AS n FROM feedback'), unread: one('SELECT COUNT(*) AS n FROM feedback WHERE read_at IS NULL') };
+  }
+  /** Mark one piece of feedback read or unread. Returns false if there is no such feedback. */
+  markFeedback(id, read, now = Date.now()) {
+    return this.db.prepare('UPDATE feedback SET read_at = ? WHERE id = ?').run(read ? now : null, id).changes > 0;
   }
   /** What the user sent through the feedback form (they sent it to us), newest first. */
   feedbackFor(userId, limit = 20) {

@@ -94,3 +94,21 @@
 .errNote { color: var(--dsw-alias-state-error-primary); }
 .feedback { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; font-size: 13px; line-height: 18px; }
 @media (max-width: 700px) { .facts { grid-template-columns: 1fr; } }
+
+.inviteForm, .auditForm { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px 12px; margin: 0 0 16px; font-size: 12px; color: var(--dsw-alias-label-secondary); }
+.inviteForm label, .auditForm label { display: grid; gap: 4px; }
+.inviteForm .input, .auditForm .input { max-width: none; width: 200px; }
+.auditForm select.input { width: 160px; }
+.linkList { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; width: 100%; }
+.linkRow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.linkInput { flex: 1; min-width: 260px; min-height: 28px; box-sizing: border-box; padding: 0 8px; font: inherit; font-size: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-base); border: 0.5px solid var(--dsw-alias-border-l4); border-radius: var(--dsw-radius-sm); }
+.tabs { display: flex; gap: 4px; margin: 0 0 12px; }
+.tabs a { padding: 4px 10px; font-size: 13px; color: var(--dsw-alias-label-secondary); text-decoration: none; border-radius: var(--dsw-radius-md); }
+.tabs a[aria-current='page'] { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); font-weight: 500; }
+.feedbackList { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.feedbackList li { padding: 10px 12px; border: 0.5px solid var(--dsw-alias-border-l3); border-radius: var(--dsw-radius-md); }
+.feedbackRead { opacity: 0.65; }
+.feedbackHead { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; font-size: 12px; color: var(--dsw-alias-label-secondary); }
+.feedbackHead .smallButton { margin-left: auto; }
+.feedbackText { margin: 6px 0 0; font-size: 13px; line-height: 19px; color: var(--dsw-alias-label-primary); white-space: pre-wrap; overflow-wrap: anywhere; }
+.table td > .chip:first-child { margin-left: 0; }

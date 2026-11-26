@@ -76,7 +76,7 @@ test('store aggregates: user counts, who was active, audit counts and start time
   assert.deepEqual(counts.find((x) => x.event === 'sandbox.refused'), { event: 'sandbox.refused', why: 'capacity', n: 1 });
   assert.deepEqual(s.startTimes(NOW - 7 * D).map((x) => [x.ms, x.resumed]).sort((p, q) => p[0] - q[0]), [[4000, true], [9000, false]]);
   assert.deepEqual(s.startTimes(NOW - D).map((x) => x.ms), [4000], 'only the starts inside the window');
-  assert.equal(s.feedbackCount(), 0);
+  assert.deepEqual(s.feedbackCounts(), { total: 0, unread: 0 });
 });
 
 test('overview: every section from seeded data', async () => {
@@ -148,7 +148,7 @@ test('overview: no capacity limit is null, and the output carries no password ha
   w.store.addFeedback(1, 'bug', 'a private message from the user', { source: 'x' });
   const o = await w.overview();
   assert.equal(o.sandboxes.capacity, null);
-  assert.equal(o.feedbackCount, 1);
+  assert.deepEqual(o.feedback, { total: 1, unread: 1 });
   const text = JSON.stringify(o);
   assert.ok(!text.includes('secret-hash-value'));
   assert.ok(!text.includes('a private message'));
