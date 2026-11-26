@@ -471,7 +471,7 @@ test('the user listener has no admin routes, even for a caller holding the admin
   const h = await harness();
   try {
     const token = h.store.issueToken(1);
-    for (const [method, path, body] of [['GET', '/admin/usage/1'], ['GET', '/admin/usage'], ['POST', '/admin/tokens', { userId: 1 }], ['DELETE', '/admin/tokens/1'], ['GET', '/admin']]) {
+    for (const [method, path, body] of [['GET', '/admin/usage/1'], ['GET', '/admin/usage'], ['GET', '/admin/stats?days=7'], ['POST', '/admin/tokens', { userId: 1 }], ['DELETE', '/admin/tokens/1'], ['GET', '/admin']]) {
       for (const bearer of [ADMIN, token, undefined]) {
         const r = await h.call(path, { token: bearer, method, body });
         assert.equal(r.status, 404, `${method} ${path} with ${bearer === ADMIN ? 'admin secret' : bearer ? 'user token' : 'no auth'}`);
@@ -660,5 +660,33 @@ test('admin usage includes the service-wide budget state, or null when there is 
     assert.equal((await (await open.adminCall('/admin/usage/1')).json()).global, null);
   } finally {
     await open.close();
+  }
+});
+
+test('stats: tokens, requests and users per day with zero days filled in, bounded, behind the admin secret', async () => {
+  const h = await harness();
+  try {
+    const day = 86_400_000;
+    const now = Date.UTC(2026, 10, 26, 12);
+    h.store.record(1, { input: 30, output: 20 }, now);
+    h.store.record(2, { input: 5, output: 5 }, now);
+    h.store.record(1, { input: 100, output: 0 }, now - 2 * day);
+    h.store.record(1, { input: 999, output: 1 }, now - 40 * day);
+    const series = h.store.dailySeries(5, now);
+    assert.deepEqual(series.map((d) => d.day), ['2026-11-22', '2026-11-23', '2026-11-24', '2026-11-25', '2026-11-26'], 'oldest first, ending today');
+    assert.deepEqual(series[4], { day: '2026-11-26', tokens: 60, requests: 2, users: 2 });
+    assert.deepEqual(series[2], { day: '2026-11-24', tokens: 100, requests: 1, users: 1 });
+    assert.deepEqual(series[3], { day: '2026-11-25', tokens: 0, requests: 0, users: 0 }, 'a quiet day is a zero, not a gap');
+    assert.equal(h.store.dailySeries(5, now).reduce((n, d) => n + d.tokens, 0), 160, 'older usage is outside the window');
+    assert.equal(h.store.dailySeries(1000, now).length, 90, 'at most 90 days');
+    assert.equal(h.store.dailySeries(-3, now).length, 1, 'a negative count is one day');
+    assert.equal(h.store.dailySeries(Number.NaN, now).length, 14, 'not a number falls back to the default');
+    const bad = await h.adminCall('/admin/stats', 'GET', undefined, 'wrong-secret');
+    assert.equal(bad.status, 401);
+    const ok = await (await h.adminCall('/admin/stats?days=3')).json();
+    assert.equal(ok.days.length, 3);
+    assert.ok('global' in ok);
+  } finally {
+    await h.close();
   }
 });

@@ -45,6 +45,14 @@ export class LlmProxyClient {
   activity() {
     return this.#call('GET', '/admin/activity');
   }
+  /** { days: [{ day, tokens, requests, users }], global } for the admin overview. */
+  stats(days = 14) {
+    return this.#call('GET', `/admin/stats?days=${Number(days) || 14}`);
+  }
+  /** Every user's usage report (day, month, limits), for the admin overview. */
+  usageAll() {
+    return this.#call('GET', '/admin/usage');
+  }
   usage(userId) {
     return this.#call('GET', `/admin/usage/${userId}`);
   }
