@@ -1,5 +1,5 @@
 import http from 'node:http';
-import { SandboxProblem, classifyFailure, noticeFor, problemFor, shapeUsage, usageProblem, usageWarnings } from './states.js';
+import { SandboxProblem, classifyFailure, crashNotice, noticeFor, problemFor, shapeUsage, usageProblem, usageWarnings } from './states.js';
 
 /** Startup stages in order; the launching page renders these labels from /gw/api/status. */
 export const STAGES = [
@@ -37,6 +37,8 @@ export class SandboxManager {
     this.signalWarned = false;
     this.problems = new Map(); // userId -> { code, params } of the last failure or limit stop, for the designed state
     this.diskCache = { at: 0, byUser: new Map() }; // per-user volume bytes from the runner, refreshed at most once a minute
+    this.crashes = new Map(); // userId -> [ms] of recent unexpected exits, for the crash-loop guard
+    this.lastCrash = new Map(); // userId -> { at, oom } of the latest one, for the banner
     this.lastStop = new Map(); // userId -> { by } when a stop the user did not ask for is waiting to be explained on return
   }
 
@@ -55,8 +57,15 @@ export class SandboxManager {
     this.sockets.set(userId, Math.max(0, (this.sockets.get(userId) ?? 1) - 1));
     this.touch(userId);
   }
+  /**
+   * A proxied request or socket to the sandbox failed: forget the cached entry. If the container turns out to have exited
+   * (the browser reconnecting to a crashed harness gets here before the watchdog's next look), that is a crash: record it
+   * and restart as the watchdog would.
+   */
   invalidate(userId) {
+    if (!this.cache.has(userId)) return;
     this.cache.delete(userId);
+    this.runner.info(userId).then((info) => (info && !info.running ? this.#exited(userId, info) : undefined)).catch(() => {});
   }
 
   /** Cached entry if the container is still the same running instance, else null. */
@@ -69,8 +78,57 @@ export class SandboxManager {
       entry.checkedAt = Date.now();
       return entry;
     }
+    // A container we had running is gone: it exited on its own (a deliberate stop clears the cache first).
+    if (info && !info.running) await this.noteExit(userId, info);
     this.cache.delete(userId);
     return null;
+  }
+
+  /**
+   * A sandbox we believed was running has exited without our stopping it. Record why (exit code, out of memory), and start it
+   * again if the user is still around, unless it keeps happening: crashMaxRestarts exits within crashWindowSeconds hold it as
+   * "crash_loop" until the user restarts it. Safe to call twice for the same exit (only the first one acts).
+   */
+  async noteExit(userId, info = null) {
+    if (!this.cache.has(userId)) return;
+    this.cache.delete(userId);
+    try {
+      info ??= await this.runner.info(userId);
+    } catch {}
+    await this.#exited(userId, info);
+  }
+
+  async #exited(userId, info) {
+    const now = Date.now();
+    const oom = Boolean(info?.oomKilled);
+    const recent = [...(this.crashes.get(userId) ?? []).filter((t) => now - t <= this.cfg.crashWindowSeconds * 1000), now];
+    this.crashes.set(userId, recent);
+    this.lastCrash.set(userId, { at: now, oom });
+    this.audit.record('sandbox.crashed', { userId, exitCode: info?.exitCode ?? null, oom, recent: recent.length });
+    this.log(`sandbox ${userId} exited unexpectedly (exit ${info?.exitCode ?? '?'}${oom ? ', out of memory' : ''})`);
+    const wanted = (this.sockets.get(userId) ?? 0) > 0 || now - (this.lastSeen.get(userId) ?? 0) <= this.cfg.idleSeconds * 1000;
+    if (recent.length > this.cfg.crashMaxRestarts) {
+      const message = 'Your workspace keeps stopping unexpectedly.';
+      this.held.set(userId, message);
+      this.problems.set(userId, { code: 'crash_loop', params: { count: recent.length, windowSeconds: this.cfg.crashWindowSeconds, oom } });
+      this.errors.set(userId, message);
+      this.audit.record('sandbox.crash_loop', { userId, count: recent.length });
+      return;
+    }
+    if (!wanted) {
+      this.lastStop.set(userId, { by: 'crashed' }); // explained on the next visit; nobody is waiting for it now
+      return;
+    }
+    this.audit.record('sandbox.auto_restart', { userId });
+    this.ensure(userId).catch(() => {}); // failures show through the status
+  }
+
+  /** The crash watchdog: notice sandboxes that exited on their own and restart them at once. */
+  async watch() {
+    const list = await this.runner.list();
+    for (const s of list) {
+      if (!s.running && this.cache.has(s.userId) && !this.inflight.has(s.userId)) await this.noteExit(s.userId);
+    }
   }
 
   setStage(userId, stage, extra = {}) {
@@ -121,6 +179,7 @@ export class SandboxManager {
         return Promise.reject(new Error(this.held.get(userId)));
       }
       this.held.delete(userId);
+      this.crashes.delete(userId); // the user chose to try again: a fresh count
     }
     let p = this.inflight.get(userId);
     if (!p) {
@@ -356,6 +415,7 @@ export class SandboxManager {
     if (info?.running) await this.stop(userId, 'user_restart');
     this.audit.record('sandbox.restart', { userId });
     this.held.delete(userId);
+    this.crashes.delete(userId);
     this.touch(userId);
     const done = this.ensure(userId, { explicit: true });
     done.catch(() => {}); // failures are reported through the status
@@ -404,8 +464,15 @@ export class SandboxManager {
       storage,
       run,
       problem: usageProblem(tokens),
-      warnings: usageWarnings({ tokens, storage, run }, cfg),
+      warnings: [...this.#crashWarning(userId), ...usageWarnings({ tokens, storage, run }, cfg)],
     };
+  }
+
+  /** For 15 minutes after an automatic restart, tell the user it happened (an empty list otherwise). */
+  #crashWarning(userId) {
+    const c = this.lastCrash.get(userId);
+    if (!c || Date.now() - c.at > 15 * 60 * 1000 || !this.cache.has(userId)) return [];
+    return [crashNotice({ oom: c.oom })];
   }
 
   /** True if the agent in this sandbox looked busy (model call or CPU use) within the last busySignalSeconds. */
@@ -490,6 +557,10 @@ export class SandboxManager {
   }
 
   startReaper() {
+    if (this.cfg.watchdogSeconds > 0) {
+      const w = setInterval(() => this.watch().catch((e) => this.log(`watchdog: ${e.message}`)), this.cfg.watchdogSeconds * 1000);
+      w.unref();
+    }
     const t = setInterval(() => this.reap().catch((e) => this.log(`reap: ${e.message}`)), this.cfg.reapIntervalSeconds * 1000);
     t.unref();
     return t;

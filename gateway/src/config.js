@@ -43,6 +43,11 @@ export function loadConfig(env = process.env) {
     maxRunSeconds: int('MAX_RUN_SECONDS', 0), // continuous run time before a sandbox is stopped
     maxDiskMb: int('MAX_DISK_MB', 0), // per user, both volumes together
     diskCheckSeconds: int('DISK_CHECK_SECONDS', 300),
+    // Crash watchdog: a sandbox the user was using that exits unexpectedly is started again within watchdogSeconds. After
+    // crashMaxRestarts exits inside crashWindowSeconds it is held instead (a crash loop), until the user restarts it.
+    watchdogSeconds: int('WATCHDOG_SECONDS', 5), // 0 turns the watchdog off
+    crashMaxRestarts: int('CRASH_MAX_RESTARTS', 3),
+    crashWindowSeconds: int('CRASH_WINDOW_SECONDS', 600),
     sessionTtlSeconds: int('SESSION_TTL_SECONDS', 7 * 24 * 3600),
   };
 }

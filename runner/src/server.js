@@ -41,7 +41,7 @@ async function readJson(req) {
 /**
  * Narrow sandbox API on the control network (all but /healthz need `Authorization: Bearer RUNNER_SECRET`):
  *   GET    /v1/sandboxes              [{ userId, running }]
- *   GET    /v1/sandboxes/:id          { running, startedAt, llmManaged } or 404
+ *   GET    /v1/sandboxes/:id          { running, startedAt, llmManaged, exitCode, oomKilled } or 404
  *   POST   /v1/sandboxes/:id          { llmToken? } create (409 if it exists)
  *   POST   /v1/sandboxes/:id/start    204; 409 { error: 'stale_network' } if its network was recreated
  *   POST   /v1/sandboxes/:id/stop     204
@@ -80,6 +80,9 @@ export function createRunner({ cfg, docker, log = console.log, networks = new Ne
       return json(res, 200, {
         running: Boolean(info.State?.Running),
         startedAt: info.State?.StartedAt ?? null,
+        // Why it is not running, for the gateway's crash watchdog (null while running).
+        exitCode: info.State?.Running ? null : (info.State?.ExitCode ?? null),
+        oomKilled: Boolean(info.State?.OOMKilled),
         llmManaged: info.Config?.Labels?.[LLM_LABEL] === LLM_LABEL_VALUE,
       });
     }

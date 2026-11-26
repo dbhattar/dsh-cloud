@@ -77,7 +77,7 @@ function fakeDocker() {
     created,
     state,
     async inspect(name) {
-      return state.exists ? { Name: name, State: { Running: state.running, StartedAt: 't1' }, Config: { Labels: created.at(-1)?.spec.Labels } } : null;
+      return state.exists ? { Name: name, State: { Running: state.running, StartedAt: 't1', ExitCode: state.exitCode ?? 0, OOMKilled: Boolean(state.oomKilled) }, Config: { Labels: created.at(-1)?.spec.Labels } } : null;
     },
     async create(name, spec) {
       created.push({ name, spec });
@@ -158,13 +158,24 @@ test('lifecycle through the client: create, start, info, logs, list, stop, remov
     assert.equal(docker.created[0].name, 'dsh-sbx-1');
     assert.ok(docker.created[0].spec.Env.includes('LLM_PROXY_TOKEN=dshu_abc'));
     await client.start(1);
-    assert.deepEqual(await client.info(1), { running: true, startedAt: 't1', llmManaged: true });
+    assert.deepEqual(await client.info(1), { running: true, startedAt: 't1', llmManaged: true, exitCode: null, oomKilled: false });
     assert.match(await client.logs(1), /token=abc/);
     assert.deepEqual(await client.list(), [{ userId: 1, running: true }]);
     await client.stop(1);
     assert.equal((await client.info(1)).running, false);
     await client.remove(1);
     assert.equal(await client.info(1), null);
+  });
+});
+
+test('info says why a stopped sandbox is not running (exit code, out of memory), for the crash watchdog', async () => {
+  await withRunner(async ({ client, docker }) => {
+    await client.create(1, 'dshu_abc');
+    await client.start(1);
+    docker.state.running = false;
+    docker.state.exitCode = 137;
+    docker.state.oomKilled = true;
+    assert.deepEqual(await client.info(1), { running: false, startedAt: 't1', llmManaged: true, exitCode: 137, oomKilled: true });
   });
 });
 

@@ -9,7 +9,7 @@ API on the compose network, which sandboxes never join (`Authorization: Bearer R
 | Route | Effect |
 | --- | --- |
 | `GET /v1/sandboxes` | `[{ userId, running }]` |
-| `GET /v1/sandboxes/:id` | `{ running, startedAt, llmManaged }` or 404 |
+| `GET /v1/sandboxes/:id` | `{ running, startedAt, llmManaged, exitCode, oomKilled }` or 404 (`exitCode` is null while running; the gateway's crash watchdog reads both) |
 | `POST /v1/sandboxes/:id` `{ llmToken? }` | create, 409 if it exists |
 | `POST /v1/sandboxes/:id/start` | start, 409 `stale_network` if its network was recreated |
 | `POST /v1/sandboxes/:id/stop` | stop |

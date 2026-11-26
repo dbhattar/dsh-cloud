@@ -50,7 +50,7 @@ Each task is one topic branch and one pull request, with tests and documentation
 | **P5-7 Invite links and clearer sign-up** (done, see "P5-7 result") | 1, 2 | `/gw/signup?invite=…`, links printed by `scripts/invite.sh`, redirect back after login, distinct invalid, used and expired messages, show-password. | Unit and browser tests. |
 | **P5-8 Email via Mailgun** | 3, 19 | A mail provider interface in the gateway with a Mailgun implementation (HTTP API) and a `log` provider; password reset, emailed invites, and a "your task finished" notice that uses the P5-1 busy signal. Rate-limit sends per user and per address; never put content, tokens or invite codes in logs, and use single-use expiring reset links. Handle API errors without breaking the request that triggered the mail (queue and retry briefly, then give up and audit). Document the Mailgun setup (domain, DNS records, API key, region) and `.env` settings. | Tests against a fake Mailgun HTTP server (request shape, auth header, failures, retries, no secrets in logs); one real send through the owner's Mailgun domain is a manual step, recorded in the doc. |
 | **P5-9 Waiting room** | 5 | When at capacity, show queue position and start automatically when a slot frees, instead of the refusal. | Docker case on the capacity suite. |
-| **P5-10 Crash watchdog** | 21 | Restart a crashed harness at once and restore the open session; say what happened (uses P5-2). | Docker case: kill the harness and see recovery. |
+| **P5-10 Crash watchdog** (done, see "P5-10 result") | 21 | Restart a crashed harness at once and restore the open session; say what happened (uses P5-2). | Docker case: kill the harness and see recovery. |
 
 ### Slice 4: what a developer needs next (scope later)
 
@@ -236,6 +236,24 @@ These are gaps in what the product can do. Some come straight from code already 
 - **Busy-time cap value** (the default of two hours is a guess; measure real task lengths first).
 - **How far to curate the harness UI** for developers (P5-6 starts conservative: hide only what is confusing, not features).
 - **Sending domain for Mailgun:** a domain you control and can add DNS records to (SPF, DKIM). It blocks real delivery for P5-8 (not the other tasks), and it overlaps with the branding and domain decision above. Mailgun account region (US or EU) and the `MAIL_FROM` address also need choosing.
+
+## P5-10 result
+
+**Before:** a harness that exited (seen under load in the phase 4 abuse tests) was only noticed when the next request found its container gone, and then the user saw "starting", with nothing said about why.
+
+**Now** (`gateway/src/sandbox.js`, `states.js`; the runner's `GET /v1/sandboxes/:id` also returns `exitCode` and `oomKilled`):
+- A **watchdog** (`WATCHDOG_SECONDS`, default 5, 0 = off) compares the runner's list with what the gateway believes is running. A sandbox that exited on its own is recorded (`sandbox.crashed` with exit code, `oom`, and the number of recent exits) and, if the user is still around (a browser socket is open, or they were seen within `IDLE_SECONDS`), started again at once (`sandbox.auto_restart`). A user who left is not restarted for; their next visit says it stopped while they were away (`noticeFor('crashed')`). A deliberate stop (idle, limits, user) clears the cache first, so it is never mistaken for a crash.
+- The two other ways a crash shows up go through the same record: a request that finds the container gone (`ready()`), and a proxied request or socket that fails (`invalidate()`). **The second one matters:** with a browser open, the page's reconnect reached the dead container before the watchdog looked and dropped the cache entry, so my first version restarted the sandbox but recorded no crash. Found in the live check, now covered by a test.
+- **Crash loop:** more than `CRASH_MAX_RESTARTS` (3) exits within `CRASH_WINDOW_SECONDS` (600) is held as the designed state `crash_loop` ("Your workspace keeps stopping", with a hint when the cause was memory) and the sandbox stays stopped until the user restarts it, which starts the count again.
+- **Telling the user:** for 15 minutes after an automatic restart `/gw/api/limits` puts an info notice first in `warnings`, and the shell shows it in its banner: what happened, files and sessions kept, and that an agent turn that was running ended so the message should be sent again.
+
+**Verified** (Lima VM, gVisor): killing the container of a user with a page open brought the harness back within about five seconds, the page reconnected by itself to the harness (screenshot checked), the audit rows and the banner appeared; four kills in a row gave three restarts then `crash_loop` with the container left stopped, and the Restart action brought it back. Unit tests cover the decisions with a fake runner (the restart call removed makes six of eleven fail); the live suite is `tests/phase5/watchdog.test.mjs`.
+
+**Not done or not verified:**
+- **Restoring an in-progress turn is not possible**: the harness restarts empty-handed, so the turn that was running ends. Sessions and files are kept (they live on the volumes); the notice tells the user to send the message again. Resuming the turn itself would need harness support.
+- An out-of-memory kill under gVisor was not reproduced (the kill used was `docker kill`, exit 137, `oomKilled` false); the `oom` path is covered only by unit tests and by reading Docker's `State.OOMKilled`.
+- A crash that happens while the gateway itself is down is not seen as a crash (its cache is empty after a restart); that sandbox is simply started on the next visit.
+- The watchdog polls the runner every few seconds for all sandboxes; fine at tens of sandboxes, worth a look beyond that.
 
 ## Output limit per reply
 

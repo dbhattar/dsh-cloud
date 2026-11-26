@@ -27,6 +27,10 @@ services:
       RUNNER_SECRET: ${RUNNER_SECRET:?set RUNNER_SECRET in .env (see .env.example)}
       IDLE_SECONDS: ${IDLE_SECONDS:-1800}
       REAP_INTERVAL_SECONDS: ${REAP_INTERVAL_SECONDS:-30}
+      # Crash watchdog: restart a sandbox that exits on its own within seconds; hold it after repeated exits (see docs/plan-phase-5.md).
+      WATCHDOG_SECONDS: ${WATCHDOG_SECONDS:-5}
+      CRASH_MAX_RESTARTS: ${CRASH_MAX_RESTARTS:-3}
+      CRASH_WINDOW_SECONDS: ${CRASH_WINDOW_SECONDS:-600}
       # Sign-up needs an invite code (scripts/invite.sh) unless ALLOW_SIGNUP=true.
       ALLOW_SIGNUP: ${ALLOW_SIGNUP:-false}
       MAX_RUNNING_SANDBOXES: ${MAX_RUNNING_SANDBOXES:-20} # 0 = unlimited

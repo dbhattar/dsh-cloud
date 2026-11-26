@@ -37,6 +37,8 @@ Add `tests/phaseN/` for each new phase and list it in `run.sh`.
 | `phase5/panel` | live: real numbers and early warnings as limits near, the usage panel in a browser, Restart (container restarts, files kept), Stop staying stopped while the page keeps asking, and a page load releasing the hold |
 | `gateway/states` | every designed state's wording (plain, no internals), numbers, classification of raw errors, notices, model-access priority (budget over quota), and `status()` wiring |
 | `phase5/states` | live: capacity, run-time stop (and the button restarting it), disk stop, personal quota then shared budget, and the idle notice, through the API and in a browser when Playwright is available (`tests/ui/browser.mjs`) |
+| `gateway/watchdog` | the crash watchdog with a fake runner: restart at once, audit, the notice and its expiry, a user who left, a deliberate stop is not a crash, the crash-loop hold and its reset, and the proxy-error and request paths |
+| `phase5/watchdog` | live: a killed harness comes back with no browser, files kept, audited, neighbour untouched; the notice in the API and in a browser; a crash loop is held and Restart clears it |
 | `phase5/busy` | live: an idle sandbox is stopped at the idle limit while CPU-busy and model-busy ones survive with no browser attached, then both are stopped at the cap (`busy_cap`) and a returning user restarts normally |
 | `egress-proxy/` | address filter (private, loopback, link-local, metadata, IPv6 forms), rebinding defence, CONNECT and plain HTTP forwarding, port and scheme limits, connection cap |
 | `sandbox/` | the policy the entrypoint hands the harness: workspace-write rooted at /workspace, approval on, no danger-full-access preset |
