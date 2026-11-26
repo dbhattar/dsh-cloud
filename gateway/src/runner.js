@@ -21,7 +21,7 @@ export class RunnerClient {
     return { status: res.status, data: res.status === 204 ? null : await res.json() };
   }
 
-  /** { running, startedAt, llmManaged }, or null when the user has no container. */
+  /** { running, startedAt, llmManaged, exitCode, oomKilled }, or null when the user has no container. */
   async info(userId) {
     return (await this.#call('GET', `/${userId}`, { allow: [404] })).data;
   }

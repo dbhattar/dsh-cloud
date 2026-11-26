@@ -69,6 +69,12 @@ const PROBLEMS = {
     message: 'The program inside it exited before it was ready. Your files are safe. Try again; if it keeps happening, send us feedback and include the details below.',
     action: RETRY,
   }),
+  crash_loop: (p) => ({
+    severity: 'error',
+    title: 'Your workspace keeps stopping',
+    message: `It stopped unexpectedly ${p.count ?? 'several'} times in ${spanText(p.windowSeconds ?? 600)}${p.oom ? ' because it ran out of memory' : ''}, so we paused automatic restarts. Your files and sessions are safe.${p.oom ? ' A smaller task, or fewer programs at once, may help.' : ''} Restart it to try again; if it keeps happening, send us feedback and include the details below.`,
+    action: START,
+  }),
   service_unavailable: () => ({
     severity: 'error',
     title: 'The workspace service is not responding',
@@ -143,9 +149,21 @@ export function noticeFor(by, cfg = {}) {
       return { code: 'resumed_busy_cap', severity: 'info', message: `Your agent kept working for ${spanText(cfg.maxBusySeconds ?? 7200)} after you left, then your workspace was paused. Your files and sessions are kept.` };
     case 'evicted':
       return { code: 'resumed_evicted', severity: 'info', message: 'Your workspace was paused to free a slot for other users while it was idle. Your files and sessions are kept.' };
+    case 'crashed':
+      return { code: 'resumed_crashed', severity: 'info', message: 'Your workspace stopped unexpectedly while you were away, and has been started again. Your files and sessions are kept.' };
     default:
       return null;
   }
+}
+
+/** The banner shown after the watchdog restarted a workspace that stopped unexpectedly (an info notice, not a failure). */
+export function crashNotice({ oom = false } = {}) {
+  return {
+    code: 'restarted_after_crash',
+    severity: 'info',
+    title: oom ? 'Your workspace ran out of memory and was restarted' : 'Your workspace stopped unexpectedly and was restarted',
+    message: 'Your files and sessions are kept. If your agent was in the middle of a task, that turn ended: open the session and send your message again.',
+  };
 }
 
 /**
