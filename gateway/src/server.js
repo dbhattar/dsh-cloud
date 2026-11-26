@@ -198,7 +198,11 @@ export function createGateway({ cfg, store, manager, log = console.log, audit = 
 
     const user = userOf(req);
     if (!user) return json(res, 401, { error: 'unauthenticated' });
-    if (path === '/gw/api/me' && req.method === 'GET') return json(res, 200, { id: user.id, email: user.email });
+    if (path === '/gw/api/me' && req.method === 'GET') return json(res, 200, { id: user.id, email: user.email, welcomed: store.welcomedAt(user.id) !== null });
+    if (path === '/gw/api/welcome' && req.method === 'POST') {
+      store.markWelcomed(user.id);
+      return json(res, 200, { welcomed: true });
+    }
     if (path === '/gw/api/status' && req.method === 'GET') {
       return json(res, 200, manager.status(user.id));
     }
@@ -257,7 +261,7 @@ export function createGateway({ cfg, store, manager, log = console.log, audit = 
       if (req.method === 'GET' && req.headers['sec-fetch-dest'] === 'document') {
         const src = req.url.startsWith('//') ? '/' : req.url;
         manager.releaseUserHold?.(user.id); // coming back to the app ends a stop the user asked for
-        return send(res, 200, appShellPage({ email: user.email, src }));
+        return send(res, 200, appShellPage({ email: user.email, src, workspaceName: cfg.workspaceName }));
       }
       const sb = await manager.ready(user.id);
       if (!sb) {

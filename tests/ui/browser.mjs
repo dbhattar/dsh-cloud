@@ -38,7 +38,7 @@ export async function signIn(browser, email, password, base = process.env.BASE_U
   await page.goto(`${base}/gw/login`);
   await page.fill('form[action="/gw/login"] input[name=email]', email);
   await page.fill('form[action="/gw/login"] input[name=password]', password);
-  await Promise.all([page.waitForURL((u) => !u.pathname.startsWith('/gw/login'), { timeout: 30000 }), page.click('form[action="/gw/login"] button')]);
+  await Promise.all([page.waitForURL((u) => !u.pathname.startsWith('/gw/login'), { timeout: 30000 }), page.click('form[action="/gw/login"] button:not([type="button"])')]);
   return page;
 }
 

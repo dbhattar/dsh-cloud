@@ -36,6 +36,7 @@ export function buildSpec(cfg, userId, llmToken, hosts = {}) {
       `DSH_TRUSTED_HOST=${cfg.trustedHost}`,
       ...(llmToken ? [`LLM_PROXY_TOKEN=${llmToken}`, `LLM_BASE_URL=${cfg.llmProxyUrl}/v1`] : []),
       `DSH_DEFAULT_MODEL=${cfg.defaultModel}`,
+      ...(cfg.modelDisplayName ? [`DSH_MODEL_NAME=${cfg.modelDisplayName}`] : []),
       `DSH_SHOW_SIGN_IN=${cfg.showHarnessSignIn}`,
       ...proxyEnv(cfg),
     ],

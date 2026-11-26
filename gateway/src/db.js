@@ -48,6 +48,9 @@ export class Store {
         used_at INTEGER
       );
     `);
+    // Columns added after the first release: add them to databases that predate them.
+    const columns = this.db.prepare('PRAGMA table_info(users)').all().map((c) => c.name);
+    if (!columns.includes('welcomed_at')) this.db.exec('ALTER TABLE users ADD COLUMN welcomed_at INTEGER');
   }
   addAudit({ ts = Date.now(), event, userId = null, ip = null, detail = {} }) {
     this.db.prepare('INSERT INTO audit (ts, event, user_id, ip, detail) VALUES (?, ?, ?, ?, ?)').run(ts, event, userId, ip, JSON.stringify(detail));
@@ -70,6 +73,14 @@ export class Store {
   }
   purgeAudit(before) {
     this.db.prepare('DELETE FROM audit WHERE ts < ?').run(before);
+  }
+  /** When the user dismissed the welcome screen (ms), or null if they have not. */
+  welcomedAt(userId) {
+    return this.db.prepare('SELECT welcomed_at FROM users WHERE id = ?').get(userId)?.welcomed_at ?? null;
+  }
+  /** Record that the user has seen the welcome screen; the first time wins. */
+  markWelcomed(userId, now = Date.now()) {
+    this.db.prepare('UPDATE users SET welcomed_at = ? WHERE id = ? AND welcomed_at IS NULL').run(now, userId);
   }
   /** New single-use invite code (stored hashed; the plaintext is returned once). */
   createInvite({ note = '', ttlDays = 0 } = {}, now = Date.now()) {
