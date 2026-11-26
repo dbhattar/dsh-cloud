@@ -25,7 +25,7 @@ interface Props {
   error?: string | undefined;
   allowSignup: boolean;
   inviteRequired?: boolean | undefined;
-  invite?: { code: string; status: 'valid' | 'used' | 'expired' | 'unknown' } | null | undefined;
+  invite?: { code: string; status: 'valid' | 'used' | 'expired' | 'revoked' | 'unknown' } | null | undefined;
   next?: string | null | undefined;
   email?: string | null | undefined;
   mode?: 'login' | 'signup' | undefined;

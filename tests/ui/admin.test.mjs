@@ -111,6 +111,7 @@ test('the overview shows the seeded numbers, the chart gives the day on hover, a
     assert.match(text, /Close to an allowance[\s\S]*boss@example\.com\s+80% of the day's allowance/);
     assert.match(text, /Refused \(why\)\s+capacity 1/);
     assert.match(text, /Workspace runner: ok/);
+    assert.match(text, /0 pieces of feedback received so far\./);
     assert.match(text, /median of 1 start in 7 days/, 'singular when there is one');
     assert.match(text, /Gateway data disk: unavailable/, 'a disk is not "not responding"');
     // The chart: one image with a summary, a day's numbers on hover, and a table with the same data.
@@ -245,6 +246,133 @@ test('users: search, open an account, a stray click does nothing, stop it, then 
     // An account that does not exist.
     await page.goto(`${g.base}/gw/admin/users/999`);
     await page.getByRole('heading', { name: 'No such account' }).waitFor();
+    await page.context().close();
+  } finally { g.close(); }
+});
+
+test('invites: create two links, sign up through one in a real browser, revoke the other, and its link says it is no longer valid', async (t) => {
+  if (!browser) return t.skip(why);
+  const g = await start();
+  try {
+    const page = await g.signIn('boss@example.com');
+    await page.goto(`${g.base}/gw/admin/invites`);
+    await page.getByRole('heading', { name: 'Invites', level: 1 }).waitFor();
+    await page.getByText('No invites yet.').waitFor();
+    await page.getByLabel('Note (who it is for)').fill('for the new hires');
+    await page.getByLabel('Expires in (days, 0 = never)').fill('3');
+    await page.getByLabel('How many').fill('2');
+    await page.getByRole('button', { name: 'Create invite links' }).click();
+    const box = page.getByRole('status', { name: 'New invite links' });
+    await box.waitFor();
+    assert.match(await box.innerText(), /will not be shown again/);
+    const links = [await page.getByLabel('Invite link 1').inputValue(), await page.getByLabel('Invite link 2').inputValue()];
+    for (const l of links) assert.match(l, new RegExp(`^${g.base}/gw/signup\\?invite=inv_[\\w-]{16}$`));
+    assert.equal(await page.getByLabel('All invite links').inputValue(), links.join('\n'));
+    const rows = page.locator('tbody tr');
+    assert.equal(await rows.count(), 2);
+    assert.match(await rows.first().innerText(), /unused\s+for the new hires/);
+    // A new person signs up through the first link, in their own browser context.
+    const guest = await (await browser.newContext({ viewport: { width: 900, height: 700 } })).newPage();
+    await guest.goto(links[0].replace(g.base, g.base));
+    await guest.getByText('You have been invited').waitFor();
+    const form = guest.getByRole('form', { name: 'Create account' });
+    await form.getByLabel('Email').fill('newhire@example.com');
+    await form.getByLabel('Password').fill(PW);
+    await Promise.all([guest.waitForURL((u) => u.pathname === '/'), form.getByRole('button', { name: 'Create account' }).click()]);
+    await guest.context().close();
+    // The list shows it used, by whom, with a link to the account.
+    await page.reload();
+    const usedRow = page.locator('tbody tr', { hasText: 'newhire@example.com' });
+    await usedRow.waitFor();
+    assert.match(await usedRow.innerText(), /used/);
+    assert.equal(await usedRow.getByRole('button', { name: 'Revoke' }).count(), 0, 'a used invite cannot be revoked');
+    // Revoke the other one: a stray click only arms it.
+    const unusedRow = page.locator('tbody tr', { hasText: 'unused' });
+    await unusedRow.getByRole('button', { name: 'Revoke' }).click();
+    assert.equal(g.store.listInvites().filter((i) => i.status === 'revoked').length, 0, 'one click changed nothing');
+    await unusedRow.getByRole('button', { name: 'Click again to revoke' }).click();
+    await page.getByText('The invite no longer works.').waitFor();
+    await page.locator('tbody tr', { hasText: 'revoked' }).waitFor();
+    // The revoked link says so.
+    const other = await (await browser.newContext()).newPage();
+    await other.goto(links[1]);
+    await other.getByText('That invite is no longer valid').waitFor();
+    await other.context().close();
+    await page.screenshot({ path: process.env.ADMIN_INVITES_SHOT || '/tmp/admin-invites.png', fullPage: true });
+    await page.context().close();
+  } finally { g.close(); }
+});
+
+test('feedback: unread first, mark read and it leaves the list, All shows it, mark unread brings it back, text is shown as text', async (t) => {
+  if (!browser) return t.skip(why);
+  const g = await start();
+  try {
+    g.store.addFeedback(2, 'bug', 'the <b>send</b> button does nothing', {});
+    g.store.addFeedback(3, 'idea', 'please add dark mode', {});
+    const page = await g.signIn('boss@example.com');
+    await page.goto(`${g.base}/gw/admin/feedback`);
+    await page.getByText('2 unread of 2').waitFor();
+    const text = await page.locator('main').innerText();
+    assert.match(text, /idea[\s\S]*other@example\.com[\s\S]*please add dark mode/);
+    assert.match(text, /the <b>send<\/b> button does nothing/, 'markup in a message is shown, not run');
+    assert.equal(await page.locator('main b').count(), 0);
+    await page.locator('li', { hasText: 'please add dark mode' }).getByRole('button', { name: 'Mark read' }).click();
+    await page.getByText('1 unread of 2').waitFor();
+    assert.equal(await page.getByText('please add dark mode').count(), 0, 'it left the unread list');
+    await page.getByRole('link', { name: 'All' }).click();
+    const item = page.locator('li', { hasText: 'please add dark mode' });
+    await item.waitFor();
+    await item.getByRole('button', { name: 'Mark unread' }).click();
+    await page.getByText('2 unread of 2').waitFor();
+    await page.screenshot({ path: process.env.ADMIN_FEEDBACK_SHOT || '/tmp/admin-feedback.png', fullPage: true });
+    await page.getByRole('link', { name: 'plain@example.com' }).click();
+    await page.getByRole('heading', { name: 'plain@example.com', level: 1 }).waitFor();
+    await page.context().close();
+  } finally { g.close(); }
+});
+
+test('audit: filter by event and by time, page with Older rows, and download the same search as a CSV', async (t) => {
+  if (!browser) return t.skip(why);
+  const g = await start();
+  try {
+    for (let i = 0; i < 60; i++) g.store.addAudit({ event: i % 3 === 0 ? 'login.ok' : 'sandbox.start', userId: 2, ip: `10.0.0.${i}`, detail: { n: i } });
+    g.store.addAudit({ ts: Date.now() - 10 * 86_400_000, event: 'login.fail', userId: 3, detail: { reason: 'bad_credentials' } });
+    const page = await g.signIn('boss@example.com');
+    await page.goto(`${g.base}/gw/admin/audit`);
+    await page.getByRole('heading', { name: 'Audit log', level: 1 }).waitFor();
+    await page.locator('tbody tr').first().waitFor();
+    assert.equal(await page.locator('tbody tr').count(), 50, 'a page is 50 rows');
+    await page.getByRole('link', { name: 'Older rows' }).click();
+    await page.waitForURL((u) => u.search.includes('before='));
+    await page.locator('tbody tr').first().waitFor();
+    assert.ok((await page.locator('tbody tr').count()) >= 10, 'the rest of the rows are on the next page');
+    assert.equal(await page.getByRole('link', { name: 'Older rows' }).count(), 0, 'and it ends');
+    // Filters: an event, and a time window that excludes the ten-day-old row unless asked.
+    await page.goto(`${g.base}/gw/admin/audit`);
+    await page.getByLabel('Event (a name, or a start such as sandbox.)').fill('login.fail');
+    await page.getByRole('button', { name: 'Search' }).click();
+    await page.getByText('No rows match.').waitFor();
+    await page.getByLabel('Since').selectOption('all');
+    await page.getByRole('button', { name: 'Search' }).click();
+    await page.getByRole('row', { name: /login\.fail/ }).waitFor();
+    assert.equal(await page.locator('tbody tr').count(), 1);
+    // A bad filter says so instead of showing nothing.
+    await page.goto(`${g.base}/gw/admin/audit?since=yesterday`);
+    await page.getByRole('alert').waitFor();
+    assert.match(await page.getByRole('alert').innerText(), /Since must look like/);
+    // Download the same search.
+    await page.goto(`${g.base}/gw/admin/audit?event=login.ok&since=all`);
+    await page.locator('tbody tr').first().waitFor();
+    const [download] = await Promise.all([page.waitForEvent('download'), page.getByRole('link', { name: 'Download as CSV' }).click()]);
+    assert.match(download.suggestedFilename(), /^audit-\d{4}-\d{2}-\d{2}\.csv$/);
+    const stream = await download.createReadStream();
+    let csv = '';
+    for await (const c of stream) csv += c;
+    const lines = csv.trim().split('\r\n');
+    assert.equal(lines[0], 'id,time,event,user,ip,detail');
+    assert.equal(lines.length, 1 + 21, 'the 20 login.ok rows of the 60 seeded, plus the admin\'s own sign-in');
+    assert.ok(lines.slice(1).every((l) => l.includes(',login.ok,')));
+    assert.equal(g.store.queryAudit({ event: 'admin.audit_export' }).length, 1);
     await page.context().close();
   } finally { g.close(); }
 });
