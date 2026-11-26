@@ -42,7 +42,7 @@ The proxy has no published port; `/v1` is reachable from the compose network and
 | `DAILY_TOKEN_QUOTA` / `MONTHLY_TOKEN_QUOTA` | 500000 / 5000000 | `0` = unlimited |
 | `GLOBAL_DAILY_TOKEN_BUDGET` | 0 (compose: 5000000) | all users together per UTC day; `0` = unlimited |
 | `RATE_LIMIT_PER_MINUTE` / `MAX_CONCURRENT` | 60 / 4 | per user |
-| `MAX_OUTPUT_TOKENS` / `MAX_BODY_BYTES` | 16384 / 8 MiB | |
+| `MAX_OUTPUT_TOKENS` / `MAX_BODY_BYTES` | 16384 / 8 MiB | the harness's own limit is the runner's `MODEL_MAX_OUTPUT_TOKENS` (default 16384); keep it at or below this, see [plan-phase-5](../docs/plan-phase-5.md#output-limit-per-reply) |
 | `UPSTREAM_TIMEOUT_SECONDS` / `DATA_DIR` / `PORT` | 600 / `/data` / 8081 | |
 | `ADMIN_SOCKET` | `/run/llm-admin/admin.sock` | admin API socket path |
 

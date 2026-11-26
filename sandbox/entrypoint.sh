@@ -73,6 +73,11 @@ if [ -n "${LLM_PROXY_TOKEN:-}" ] && [ -n "${LLM_BASE_URL:-}" ]; then
     echo "        baseURL: \"$LLM_BASE_URL\""
     echo "        models:"
     echo "          - id: \"$MODEL\""
+    # Declare the output limit: an unlisted model otherwise gets 4096 and a long file write is cut off mid-call ("Expected ',' or '}'").
+    case "${DSH_MODEL_MAX_TOKENS:-}" in
+      ""|*[!0-9]*|0*) ;;
+      *) echo "            maxTokens: $DSH_MODEL_MAX_TOKENS" ;;
+    esac
     # A friendly name in the model picker (config: the model's `name`). Plain words only, so it cannot break the YAML.
     case "${DSH_MODEL_NAME:-}" in
       ""|[!A-Za-z0-9]*|*[!A-Za-z0-9\ ._\(\)+/-]*) ;;
