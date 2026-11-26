@@ -1,6 +1,7 @@
 // Operator commands, run inside the gateway container (see scripts/invite.sh):
 //   node src/cli.js invite create [count] [--note TEXT] [--days N] [--link]
 //   node src/cli.js invite list
+//   node src/cli.js admin grant EMAIL | admin revoke EMAIL | admin list   (see scripts/make-admin.sh)
 //   node src/cli.js audit [--user ID] [--event NAME|PREFIX.] [--since 24h|7d] [--limit N] [--json]
 import { join } from 'node:path';
 import { parseSpan } from './audit.js';
@@ -27,6 +28,16 @@ if (area === 'invite' && action === 'create') {
 } else if (area === 'invite' && action === 'list') {
   const when = (t) => (t ? new Date(t).toISOString().slice(0, 16).replace('T', ' ') : '-');
   for (const i of store.listInvites()) console.log(`${i.usedBy ? `used by user ${i.usedBy} ${when(i.usedAt)}` : 'unused'.padEnd(10)}  created ${when(i.createdAt)}  expires ${when(i.expiresAt)}  ${i.note}`);
+} else if (area === 'admin' && (action === 'grant' || action === 'revoke')) {
+  const email = String(rest[0] ?? '').trim().toLowerCase();
+  const result = email ? store.setAdmin(email, action === 'grant') : null;
+  if (!result) (console.error(`no account with the email "${email}" (the person has to sign up first)`), process.exit(1));
+  if (result.changed) store.addAudit({ event: `admin.${action}`, userId: result.id, detail: { via: 'cli' } });
+  console.log(`${result.email} is ${result.isAdmin ? 'an admin' : 'not an admin'}${result.changed ? '' : ' (no change)'}`);
+} else if (area === 'admin' && action === 'list') {
+  const admins = store.listAdmins();
+  for (const a of admins) console.log(`user ${a.id}  ${a.email}`);
+  if (!admins.length) console.log('no admins yet: scripts/make-admin.sh EMAIL');
 } else if (area === 'audit') {
   const span = flag('--since') ? parseSpan(flag('--since')) : null;
   if (flag('--since') && !span) (console.error('--since must look like 90m, 24h or 7d'), process.exit(2));
@@ -37,6 +48,6 @@ if (area === 'invite' && action === 'create') {
     else console.log(`${new Date(r.ts).toISOString().slice(0, 19).replace('T', ' ')}  ${r.event.padEnd(18)} user=${String(r.userId ?? '-').padEnd(4)} ip=${String(r.ip ?? '-').padEnd(15)} ${Object.keys(r.detail).length ? JSON.stringify(r.detail) : ''}`);
   }
 } else {
-  console.error('usage: cli.js invite create [count] [--note TEXT] [--days N] [--link] | invite list | audit [--user ID] [--event NAME] [--since 24h] [--limit N] [--json]');
+  console.error('usage: cli.js admin grant EMAIL | admin revoke EMAIL | admin list | invite create [count] [--note TEXT] [--days N] [--link] | invite list | audit [--user ID] [--event NAME] [--since 24h] [--limit N] [--json]');
   process.exit(2);
 }

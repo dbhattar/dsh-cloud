@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import http from 'node:http';
+import { ADMIN_PREFIX, createAdminHandler } from './admin.js';
 import { Audit } from './audit.js';
 import { MIN_PASSWORD, RateLimiter, hashPassword, normalizeEmail, parseCookies, safeNext, verifyPassword } from './auth.js';
 import { FEEDBACK_KINDS, WEB_DIST, appShellPage, feedbackPage, launchingPage, loginPage } from './pages.js';
@@ -48,6 +49,8 @@ export function createGateway({ cfg, store, manager, log = console.log, audit = 
     res.end(body);
   }
   const json = (res, status, obj) => send(res, status, JSON.stringify(obj), { 'content-type': 'application/json' });
+
+  const handleAdmin = createAdminHandler({ store, audit, userOf, clientIp, send, json });
 
   function readForm(req) {
     return new Promise((resolve, reject) => {
@@ -196,9 +199,12 @@ export function createGateway({ cfg, store, manager, log = console.log, audit = 
       }
     }
 
+    // The admin panel: its own guard and route table (admin.js), before anything else that needs a session.
+    if (path === ADMIN_PREFIX || path.startsWith(`${ADMIN_PREFIX}/`)) return handleAdmin(req, res, path);
+
     const user = userOf(req);
     if (!user) return json(res, 401, { error: 'unauthenticated' });
-    if (path === '/gw/api/me' && req.method === 'GET') return json(res, 200, { id: user.id, email: user.email, welcomed: store.welcomedAt(user.id) !== null });
+    if (path === '/gw/api/me' && req.method === 'GET') return json(res, 200, { id: user.id, email: user.email, welcomed: store.welcomedAt(user.id) !== null, admin: user.isAdmin });
     if (path === '/gw/api/welcome' && req.method === 'POST') {
       store.markWelcomed(user.id);
       return json(res, 200, { welcomed: true });
