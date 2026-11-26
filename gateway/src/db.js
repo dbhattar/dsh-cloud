@@ -4,6 +4,8 @@ import { dirname } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { hashToken, newSessionToken } from './auth.js';
 
+const accountRow = (r) => ({ id: Number(r.id), email: r.email, createdAt: r.created_at, isAdmin: r.is_admin === 1, suspendedAt: r.suspended_at ?? null, lastActive: r.last_active ?? null });
+
 export class Store {
   constructor(file) {
     if (file !== ':memory:') mkdirSync(dirname(file), { recursive: true });
@@ -52,6 +54,7 @@ export class Store {
     const columns = this.db.prepare('PRAGMA table_info(users)').all().map((c) => c.name);
     if (!columns.includes('welcomed_at')) this.db.exec('ALTER TABLE users ADD COLUMN welcomed_at INTEGER');
     if (!columns.includes('is_admin')) this.db.exec('ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0');
+    if (!columns.includes('suspended_at')) this.db.exec('ALTER TABLE users ADD COLUMN suspended_at INTEGER');
   }
   addAudit({ ts = Date.now(), event, userId = null, ip = null, detail = {} }) {
     this.db.prepare('INSERT INTO audit (ts, event, user_id, ip, detail) VALUES (?, ?, ?, ?, ?)').run(ts, event, userId, ip, JSON.stringify(detail));
@@ -184,11 +187,12 @@ export class Store {
     if (!token) return null;
     const row = this.db
       .prepare(
-        `SELECT u.id, u.email, u.is_admin, s.expires_at FROM sessions s JOIN users u ON u.id = s.user_id
+        `SELECT u.id, u.email, u.is_admin, u.suspended_at, s.expires_at FROM sessions s JOIN users u ON u.id = s.user_id
          WHERE s.token_hash = ?`,
       )
       .get(hashToken(token));
     if (!row) return null;
+    if (row.suspended_at !== null) return null; // a suspended account has no working session, even one that somehow survived
     if (row.expires_at < Date.now()) {
       this.deleteSession(token);
       return null;
@@ -207,6 +211,55 @@ export class Store {
   }
   listAdmins() {
     return this.db.prepare('SELECT id, email FROM users WHERE is_admin = 1 ORDER BY id').all();
+  }
+  // ---- accounts, for the admin pages ----
+  /**
+   * Accounts with when they were last active (sign-in or workspace start), newest sign-up first. `q` matches part of the email
+   * (case-insensitive); `limit` is at most 200. Returns { rows, total } where total counts every match.
+   */
+  listUsers({ q = '', limit = 50, offset = 0 } = {}) {
+    const like = `%${String(q).trim().toLowerCase().replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+    const total = Number(this.db.prepare("SELECT COUNT(*) AS n FROM users WHERE lower(email) LIKE ? ESCAPE '\\'").get(like).n);
+    const rows = this.db
+      .prepare(
+        `SELECT u.id, u.email, u.created_at, u.is_admin, u.suspended_at,
+           (SELECT MAX(ts) FROM audit a WHERE a.user_id = u.id AND a.event IN ('login.ok', 'signup.ok', 'sandbox.start')) AS last_active
+         FROM users u WHERE lower(u.email) LIKE ? ESCAPE '\\' ORDER BY u.id DESC LIMIT ? OFFSET ?`,
+      )
+      .all(like, Math.min(200, Math.max(1, limit)), Math.max(0, offset))
+      .map(accountRow);
+    return { rows, total };
+  }
+  /** One account in the same shape as listUsers, or null. */
+  accountById(id) {
+    const r = this.db
+      .prepare(
+        `SELECT u.id, u.email, u.created_at, u.is_admin, u.suspended_at,
+           (SELECT MAX(ts) FROM audit a WHERE a.user_id = u.id AND a.event IN ('login.ok', 'signup.ok', 'sandbox.start')) AS last_active
+         FROM users u WHERE u.id = ?`,
+      )
+      .get(id);
+    return r ? accountRow(r) : null;
+  }
+  /** Suspend an account and end every session it has. Returns true if it changed. */
+  suspendUser(id, now = Date.now()) {
+    const r = this.db.prepare('UPDATE users SET suspended_at = ? WHERE id = ? AND suspended_at IS NULL').run(now, id);
+    this.deleteSessionsFor(id);
+    return r.changes > 0;
+  }
+  unsuspendUser(id) {
+    return this.db.prepare('UPDATE users SET suspended_at = NULL WHERE id = ? AND suspended_at IS NOT NULL').run(id).changes > 0;
+  }
+  /** End every session of a user ("sign out everywhere"). Returns how many there were. */
+  deleteSessionsFor(userId) {
+    return this.db.prepare('DELETE FROM sessions WHERE user_id = ?').run(userId).changes;
+  }
+  /** What the user sent through the feedback form (they sent it to us), newest first. */
+  feedbackFor(userId, limit = 20) {
+    return this.db
+      .prepare('SELECT id, kind, message, created_at FROM feedback WHERE user_id = ? ORDER BY id DESC LIMIT ?')
+      .all(userId, limit)
+      .map((f) => ({ id: Number(f.id), kind: f.kind, message: f.message, createdAt: f.created_at }));
   }
   deleteSession(token) {
     this.db.prepare('DELETE FROM sessions WHERE token_hash = ?').run(hashToken(token));

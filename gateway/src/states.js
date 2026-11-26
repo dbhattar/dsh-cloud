@@ -51,6 +51,12 @@ const PROBLEMS = {
     message: `It uses ${number(p.usedMb)} MB of the ${number(p.limitMb ?? cfg.maxDiskMb)} MB you can store, so it was stopped. Start it again and delete files you do not need. Storage is checked about every ${spanText(p.checkSeconds ?? cfg.diskCheckSeconds)} and the workspace is stopped again while it is still over.`,
     action: START,
   }),
+  stopped_admin: () => ({
+    severity: 'info',
+    title: 'Your workspace was stopped by an administrator',
+    message: 'Your files and sessions are saved. Start it again when you want to keep working. If this was unexpected, send us feedback.',
+    action: START,
+  }),
   stopped_user: () => ({
     severity: 'info',
     title: 'Your workspace is stopped',

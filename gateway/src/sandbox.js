@@ -36,7 +36,7 @@ export class SandboxManager {
     this.keptBusy = new Set(); // userIds currently being kept alive past the idle limit (so the audit line is written once)
     this.signalWarned = false;
     this.problems = new Map(); // userId -> { code, params } of the last failure or limit stop, for the designed state
-    this.diskCache = { at: 0, byUser: new Map() }; // per-user volume bytes from the runner, refreshed at most once a minute
+    this.diskCache = { at: 0, loaded: false, byUser: new Map() }; // per-user volume bytes from the runner, refreshed at most once a minute
     this.crashes = new Map(); // userId -> [ms] of recent unexpected exits, for the crash-loop guard
     this.lastCrash = new Map(); // userId -> { at, oom } of the latest one, for the banner
     this.lastStop = new Map(); // userId -> { by } when a stop the user did not ask for is waiting to be explained on return
@@ -397,6 +397,58 @@ export class SandboxManager {
     this.errors.set(userId, message);
   }
 
+  /** An administrator stops the workspace. It stays stopped (a designed state with a Start button) until the user starts it. */
+  async stopByAdmin(userId) {
+    const info = await this.runner.info(userId);
+    if (info?.running) await this.stop(userId, 'admin');
+    const message = 'An administrator stopped your workspace.';
+    this.held.set(userId, message);
+    this.problems.set(userId, { code: 'stopped_admin', params: {} });
+    this.errors.set(userId, message);
+  }
+
+  /**
+   * Suspend: stop the workspace, keep it stopped, and cut off model access (the proxy token is revoked, so even a process still
+   * running somewhere cannot spend tokens). The account side (no sign-in, no sessions) is the store's suspendUser.
+   */
+  async suspend(userId) {
+    await this.stopByAdmin(userId);
+    this.crashes.delete(userId);
+    if (this.llm) {
+      try {
+        await this.llm.revoke(userId);
+      } catch (e) {
+        this.log(`suspend ${userId}: could not revoke the model token: ${e.message}`);
+        throw new Error('could not revoke the model token');
+      }
+    }
+  }
+
+  /**
+   * Lift a suspension. The old container carries the revoked token, so it is removed (volumes stay); the next start creates one
+   * with a fresh token.
+   */
+  async unsuspend(userId) {
+    this.held.delete(userId);
+    this.problems.delete(userId);
+    this.errors.delete(userId);
+    this.cache.delete(userId);
+    if (await this.runner.info(userId)) await this.runner.remove(userId);
+  }
+
+  /** Why a workspace is being held stopped (a designed-state code), or null. */
+  heldCode(userId) {
+    return this.held.has(userId) ? (this.problems.get(userId)?.code ?? 'held') : null;
+  }
+
+  /** Volume bytes by user id, from the same one-minute cache as the usage panel. */
+  async storageByUser() {
+    await this.#storageBytes(0);
+    // Never loaded: say so, instead of an empty map that would read as "everyone uses nothing".
+    if (!this.diskCache.loaded) throw new Error('storage usage unavailable');
+    return this.diskCache.byUser;
+  }
+
   /** The user returned to the app: a stop they asked for no longer applies. Limit stops are not released this way. */
   releaseUserHold(userId) {
     if (this.problems.get(userId)?.code !== 'stopped_user') return;
@@ -426,7 +478,7 @@ export class SandboxManager {
   async #storageBytes(userId) {
     if (Date.now() - this.diskCache.at > 60_000) {
       try {
-        this.diskCache = { at: Date.now(), byUser: new Map((await this.runner.diskUsage()).map((u) => [u.userId, u.bytes])) };
+        this.diskCache = { at: Date.now(), loaded: true, byUser: new Map((await this.runner.diskUsage()).map((u) => [u.userId, u.bytes])) };
       } catch (e) {
         this.log(`storage usage: ${e.message}`);
         this.diskCache = { ...this.diskCache, at: Date.now() - 30_000 }; // try again in 30 s, keep what we had
