@@ -54,9 +54,26 @@ Each task is one topic branch and one pull request, with tests and documentation
 
 ### Slice 4: what a developer needs next (scope later)
 
-Working with repositories with credentials injected at the egress proxy (24); previewing what the agent builds (25); scheduled tasks that wake the sandbox (20); per-user snapshots (26); GitHub sign-in (29); bring-your-own key (27); account page (4); admin page (16). These get task breakdowns after slice 1 and 2 are in and measured.
+Working with repositories with credentials injected at the egress proxy (24); previewing what the agent builds (25); scheduled tasks that wake the sandbox (20); per-user snapshots (26); GitHub sign-in (29); bring-your-own key (27); account page (4). These get task breakdowns after slice 1 and 2 are in and measured.
+
+### Slice 5: operating it (the admin panel)
+
+The owner can only run this service through shell scripts today (`scripts/invite.sh`, `audit.sh`, `usage.sh`, `backup.sh`, `restart.sh`) and by editing `.env` and restarting. That does not scale past one person who knows the commands, and every policy this phase added (idle, busy cap, run time, disk, capacity, quotas, crash loop) is a restart away. This slice adds an admin panel. The design is in "Admin panel (design)" below; the numbers follow the earlier tasks.
+
+| Task | Item | What and where | Verify |
+| --- | --- | --- | --- |
+| **P5-11 Admin role and shell** | 16 | An `is_admin` flag on users, set only from the command line (`scripts/make-admin.sh`, audited), never by a request. `/gw/admin/*` routes behind a guard: a signed-in admin, same-origin, no sandbox proxying, every action audited with the acting admin. An admin page in the gateway web app with its own navigation and a link in the shell for admins only. No content of a user's workspace or sessions is ever readable here. | Unit tests: a non-admin and a signed-out request are refused on every admin route (a table of routes, so a new route without the guard fails); audit rows carry the admin. Browser check as an admin and as a normal user. |
+| **P5-12 Overview and stats (read only)** | 16, 17 | One page of numbers from what is already recorded: users (total, new, active over 24 hours and 7 days), running sandboxes against capacity, model tokens today and this month (total, by user, by model), storage (total, largest users), refusals and crashes by kind, time-to-ready, quota near-misses, and service health (runner, llm-proxy, egress proxy, disk of the host). New read endpoints on the llm-proxy admin socket and the runner where a number is not in the gateway database. Charts only where they beat a table. | Unit tests for each aggregate against a seeded database; the page checked in a browser with seeded data and with an empty stack. |
+| **P5-13 Users and sandboxes** | 16 | Search and list users with state, last seen, usage and storage; open one user's page: sandbox state, recent audit rows, usage, feedback. Actions: stop, restart, suspend and unsuspend (a suspended user cannot sign in or reach the sandbox and sees a designed state), sign out everywhere, and delete the user's data with a typed confirmation. | Unit and Docker cases for each action; suspend refuses login and proxying; delete removes volumes, network, tokens and rows and is audited. |
+| **P5-14 Invites, feedback and audit** | 16 | Create (with note, expiry, link), list and revoke invites; the feedback inbox (the table exists, nothing reads it yet) with a read flag; audit search with the same filters as the CLI and an export. | Unit tests; the CLI and the page agree on the same data. |
+| **P5-15 Policies you can change** | 16 | A settings store in the gateway database for the policies listed below, with defaults from the environment so nothing changes until an admin edits something. Each setting has a type, bounds, a plain description and where it applies (live, next start, or needs a runner restart). Edits are validated, audited (old and new value, who) and take effect without restarting the gateway. Show the effective value and where it came from. A "reset to default" per setting. | Unit tests per setting (bounds, live effect, audit row); a Docker case that changes the idle limit and sees a sandbox stopped under the new value; a bad value never reaches the running policy. |
+| **P5-16 Per-user overrides** | 16 | A quota (day and month), storage and run-time override for one user, with an expiry and a reason, for the friend who needs more today; shown in the user's own usage panel as theirs. Needs the llm-proxy to accept an override over its admin socket. | Unit tests in the proxy and the gateway; a Docker case: raise one user's quota and see the other unchanged. |
 
 ## Order and dependencies
+
+P5-11 first, then P5-12 (it is read only, so it is safe to ship early and tells us what to build next). P5-13 to P5-15 can follow in any order; P5-15 is the largest and touches the llm-proxy and the runner. P5-16 needs P5-15's store.
+
+Earlier tasks:
 
 P5-1 first (it fixes lost work and P5-8 depends on its signal), then P5-2 and P5-3 (P5-2's states are what P5-3 and P5-10 display). P5-4 and P5-5 can go in parallel with slice 1, since they touch the image and the runner rather than the gateway. P5-6 and P5-7 are independent and small. P5-8 needs P5-1 and a Mailgun sending domain with its DNS records.
 
@@ -197,7 +214,7 @@ Tests: `tests/gateway/welcome.test.mjs` (5: the stored flag, migration of an old
 15. **Accessibility and mobile pass** (M): keyboard, contrast, screen reader labels, narrow screens on the gateway pages; automate with Playwright and axe.
 
 ### F. Operators
-16. **Small admin page** (M to L): invites (create, copy link, revoke), users, usage, running sandboxes with a Stop button, audit search. Deferred as a non-goal in phase 4.
+16. **Admin panel** (L, now slice 5, P5-11 to P5-16): invites, users, usage, running sandboxes, audit search, feedback, and policies that can be changed without a restart. Deferred as a non-goal in phase 4; the design is in "Admin panel (design)".
 17. **Product metrics from what we already record** (S): time-to-ready, sign-up to first message, failure and refusal rates, from the audit table; a `scripts/` report first, dashboard later.
 
 ### G. Capabilities that make the work itself seamless (not UI)
@@ -230,7 +247,35 @@ These are gaps in what the product can do. Some come straight from code already 
 34. **Privacy and data rights** (S to M): retention policy, delete-my-data, export, and a plain statement of what is logged (the audit log already excludes content).
 35. **Two-way chat channels, SMS first** (L, idea only): message the agent from a phone and get answers and approvals back, waking a stopped sandbox. Notes and open questions in [ideas-chat-channels.md](ideas-chat-channels.md); the cheap first step is one-way notices (items 19 and 28).
 
+## Admin panel (design)
+
+**Why it was missing:** it was listed as idea 16 and deferred to a vague "slice 4" line, so no task carried it and the policies added in P5-1 to P5-10 shipped with environment variables as their only control. This section and slice 5 put it on the plan.
+
+**Who is an admin.** A column on users, set only by `scripts/make-admin.sh <email>` run on the host (audited, refuses an unknown user). No page or request can grant it, so an attacker who takes over a normal account cannot become an admin. Start with the owner only; more than one admin is allowed. Whether admin sign-in needs more than a password (a second factor) is an open decision.
+
+**Where it lives.** In the gateway web app under `/gw/admin`, on the same origin and session as everything else, behind a guard that checks the admin flag on every request (not only when the page loads). It is not proxied to a sandbox and sandboxes cannot reach it (they have no route to the gateway except through their own proxy path). Option left for later: serve it on a second port bound to a private network or VPN only.
+
+**What an admin can see, and never see.** Accounts, state, usage, storage, audit rows, feedback and system health. Never the content of a workspace, a session, a prompt or a model reply (the same rule as the audit log), and there is no "log in as this user". An admin who needs to see what a user sees asks the user.
+
+**Stats and where each number comes from** (so the panel adds no new tracking):
+- Users, sign-ups, last seen, activity: `users`, `sessions` and the audit table.
+- Running sandboxes and capacity: the runner's list against `MAX_RUNNING_SANDBOXES`.
+- Tokens by day, month, user and model: the llm-proxy's usage tables, through new read-only routes on its admin socket.
+- Storage by user: the runner's `/v1/usage` (already cached for the limits panel).
+- Refusals, stops, crashes and time-to-ready: audit events (`sandbox.refused`, `sandbox.stop` with `by`, `sandbox.crashed`, `sandbox.start` with `ms`).
+- Health: the same checks the stack's health endpoints and `restart.sh` use, plus host disk.
+
+**Policies that can be edited** (each an existing setting; the environment value stays the default): idle limit, busy cap, busy signals, run-time limit, disk limit and check interval, running-sandbox capacity and eviction age, watchdog and crash-loop limits, whether sign-up is open or invite only, session lifetime, the daily and monthly quota defaults, the global daily budget, per-minute request and concurrency limits, the output limit and the allowed models. **Not editable from the panel on purpose:** secrets, the upstream key, image names and digests, the sandbox runtime, network ranges, egress rules and the security properties tested in `tests/phase4/`. Sandbox resource limits (memory, CPU, processes) are runner settings applied when a sandbox is created, so they are shown with their value and "applies to sandboxes created from now on", and changing them is a later step, not part of P5-15.
+
+**How changes take effect.** Gateway policies are read from the store on each use (a short cache), so they apply at once. Llm-proxy policies are pushed over its admin socket and applied live. A setting that cannot apply live says so next to the field. Every change is an audit row with the admin, the setting and the old and new values, and the panel shows the last few changes.
+
+**Safety:** every state-changing route is POST with the same-origin check and a CSRF token; destructive actions (delete data, suspend) need a typed confirmation; the admin routes are rate limited; bounds on every value stop a typo from turning a limit off by accident (a 0 meaning "unlimited" needs an explicit confirmation).
+
+**Out of scope for now:** billing, roles other than admin, an API for other programs, alerting and paging (a webhook or email alert on thresholds can follow P5-8), and editing the harness configuration.
+
 ## Open decisions
+
+- **Admin panel:** who the admins are (owner only, or a few people); whether admin sign-in needs a second factor before the panel is exposed to the internet; whether to also serve it on a private-only port; whether per-user overrides (P5-16) are wanted in the first release.
 
 - **Branding, domain and legal pages** (needed before a public launch).
 - **Busy-time cap value** (the default of two hours is a guess; measure real task lengths first).
