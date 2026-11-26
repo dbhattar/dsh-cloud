@@ -69,6 +69,13 @@ test('curated UI: the model picker shows the friendly name when one is given, an
   }
 });
 
+test('model output limit: declared on the model so a long file write is not cut off at the harness default, and only digits are accepted', () => {
+  const withMax = (v) => patchFor({ LLM_PROXY_TOKEN: 'dshu_x', LLM_BASE_URL: 'http://llm-proxy:8081/v1', ...(v === undefined ? {} : { DSH_MODEL_MAX_TOKENS: v }) });
+  assert.match(withMax('16384'), /- id: "openrouter\/free"\n            maxTokens: 16384\n/);
+  assert.ok(!/maxTokens/.test(withMax()), 'nothing declared when unset');
+  for (const bad of ['', '0', '012', '-1', '16k', '1\n- id: x', '$(id)']) assert.ok(!/maxTokens/.test(withMax(bad)), JSON.stringify(bad));
+});
+
 // ---- first-run "Preview Notice" ----
 const versionFile = (text) => {
   const f = join(mkdtempSync(join(tmpdir(), 'welcome-')), 'WELCOME_NOTICE_VERSION');

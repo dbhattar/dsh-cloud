@@ -31,6 +31,9 @@ export function loadConfig(env = process.env) {
     defaultModel: env.DEFAULT_MODEL || 'openrouter/free',
     // What the model is called in the model picker. Empty = the catalog's own name. Plain words only (it goes into a YAML patch).
     modelDisplayName: modelDisplayName(env),
+    // Most one model reply may produce, as the harness declares it. Without it the harness assumes 4096 for an unlisted model and cuts a long
+    // file write off mid-call. Keep it at or below the llm-proxy's MAX_OUTPUT_TOKENS (16384), which clamps anyway.
+    modelMaxOutputTokens: int('MODEL_MAX_OUTPUT_TOKENS', 16384),
     showHarnessSignIn: env.SHOW_HARNESS_SIGN_IN === 'true',
     sandboxMemoryMb: int('SANDBOX_MEMORY_MB', 1024),
     sandboxCpus: Number.parseFloat(env.SANDBOX_CPUS || '1'),

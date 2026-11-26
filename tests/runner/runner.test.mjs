@@ -472,6 +472,14 @@ test('runtime warning: plain runc (or the daemon default) warns that the shell t
   for (const rt of ['runsc', 'kata']) assert.equal(runtimeWarning(cfgOf({ SANDBOX_RUNTIME: rt })), null, rt);
 });
 
+test('model output limit: defaults to 16384 (the proxy cap), is configurable, and reaches the sandbox environment', () => {
+  assert.equal(cfgOf().modelMaxOutputTokens, 16384);
+  assert.equal(cfgOf({ MODEL_MAX_OUTPUT_TOKENS: '' }).modelMaxOutputTokens, 16384, 'empty means default (compose passes a default anyway)');
+  assert.equal(cfgOf({ MODEL_MAX_OUTPUT_TOKENS: '8192' }).modelMaxOutputTokens, 8192);
+  assert.ok(buildSpec(cfgOf(), 1).Env.includes('DSH_MODEL_MAX_TOKENS=16384'));
+  assert.ok(buildSpec(cfgOf({ MODEL_MAX_OUTPUT_TOKENS: '8192' }), 1).Env.includes('DSH_MODEL_MAX_TOKENS=8192'));
+});
+
 test('model display name: a friendly default for the free router, an override, validation, and it reaches the sandbox environment', () => {
   assert.equal(cfgOf().modelDisplayName, 'Free models (automatic)');
   assert.equal(cfgOf({ MODEL_DISPLAY_NAME: '' }).modelDisplayName, 'Free models (automatic)', 'empty means default (compose passes an empty value)');

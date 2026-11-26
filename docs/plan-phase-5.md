@@ -237,6 +237,16 @@ These are gaps in what the product can do. Some come straight from code already 
 - **How far to curate the harness UI** for developers (P5-6 starts conservative: hide only what is confusing, not features).
 - **Sending domain for Mailgun:** a domain you control and can add DNS records to (SPF, DKIM). It blocks real delivery for P5-8 (not the other tasks), and it overlaps with the branding and domain decision above. Mailgun account region (US or EU) and the `MAIL_FROM` address also need choosing.
 
+## Output limit per reply
+
+**Symptom (found by a user, 2026-11-26):** a research task failed with `MALFORMED_RESPONSE`: `Tool call "write": Expected ',' or '}' after property value in JSON at position 100`, the arguments ending right after `file_path`. The model was cut off partway through a long file write.
+
+**Cause (measured, then read):** the llm-proxy log showed the last two calls ending at exactly `"output":4096`, status 200, while the proxy's own cap is 16384 (it only lowers what the client sends). The sandbox declared the model with `id` and `name` only; the harness catalog also takes `maxTokens`, and for a model it has no catalog entry for (`openrouter/free`) the request limit was 4096. That the harness default is 4096 is inferred from the log, not read in the harness source.
+
+**Fix:** the model entry in the harness patch now declares `maxTokens` from the runner's `MODEL_MAX_OUTPUT_TOKENS` (default 16384, only digits accepted). Verified: a freshly created sandbox on the Lima VM (gVisor) has `DSH_MODEL_MAX_TOKENS=16384` and `dsh --dump-config` shows `maxTokens: 16384`. Unit tests cover the runner setting, the environment and the patch rows.
+
+**Not verified / limits:** I did not reproduce a long write end to end against the free router (its real limit per reply, and whether it honours 16384, are provider-side). A reply is now limited to the lower of this value and the proxy's `MAX_OUTPUT_TOKENS`, so a very long file can still be cut off and the agent must write it in parts. Existing sandboxes pick the setting up when they are next created (a stopped one on its next start after the runner restarts; a running one after it stops).
+
 ## How each item would be verified
 
 - Browser checks with the Playwright and Chromium setup used for the preview-notice and default-workspace fixes (scripts that sign in as a fresh user and inspect the page; not yet in the repo); promote them to a `tests/ui/` suite so the first-login experience cannot regress silently.
