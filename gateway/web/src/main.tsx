@@ -1,6 +1,7 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { readBoot } from './boot.ts';
+import { Admin } from './pages/Admin.tsx';
 import { Feedback } from './pages/Feedback.tsx';
 import { Launching } from './pages/Launching.tsx';
 import { Login } from './pages/Login.tsx';
@@ -28,6 +29,7 @@ function App() {
     case 'feedback': return <Feedback {...boot} />;
     case 'launching': return <Launching {...boot} />;
     case 'shell': return <Shell {...boot} />;
+    case 'admin': return <Admin {...boot} />;
   }
 }
 

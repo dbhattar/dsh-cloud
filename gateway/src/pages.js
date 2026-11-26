@@ -43,6 +43,11 @@ export function loginPage({ error, allowSignup, inviteRequired = false, invite =
   return render('Sign in', { page: 'login', error, allowSignup: !!allowSignup, inviteRequired: !!inviteRequired, invite, next, email, mode });
 }
 
+/** The admin panel (/gw/admin), served only to admins; see admin.js. */
+export function adminPage({ email }) {
+  return render('Admin', { page: 'admin', email });
+}
+
 export const FEEDBACK_KINDS = ['bug', 'idea', 'other'];
 
 /** Feedback form opened from the harness menu; the harness passes context as prefill_* query params. */

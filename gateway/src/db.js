@@ -51,6 +51,7 @@ export class Store {
     // Columns added after the first release: add them to databases that predate them.
     const columns = this.db.prepare('PRAGMA table_info(users)').all().map((c) => c.name);
     if (!columns.includes('welcomed_at')) this.db.exec('ALTER TABLE users ADD COLUMN welcomed_at INTEGER');
+    if (!columns.includes('is_admin')) this.db.exec('ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0');
   }
   addAudit({ ts = Date.now(), event, userId = null, ip = null, detail = {} }) {
     this.db.prepare('INSERT INTO audit (ts, event, user_id, ip, detail) VALUES (?, ?, ?, ?, ?)').run(ts, event, userId, ip, JSON.stringify(detail));
@@ -151,7 +152,7 @@ export class Store {
     if (!token) return null;
     const row = this.db
       .prepare(
-        `SELECT u.id, u.email, s.expires_at FROM sessions s JOIN users u ON u.id = s.user_id
+        `SELECT u.id, u.email, u.is_admin, s.expires_at FROM sessions s JOIN users u ON u.id = s.user_id
          WHERE s.token_hash = ?`,
       )
       .get(hashToken(token));
@@ -160,7 +161,20 @@ export class Store {
       this.deleteSession(token);
       return null;
     }
-    return { id: row.id, email: row.email };
+    return { id: row.id, email: row.email, isAdmin: row.is_admin === 1 };
+  }
+  /**
+   * Grant or take away the admin role. Only the command line calls this (scripts/make-admin.sh): no request can, so taking over
+   * a normal account never leads to admin. Returns the user, or null if there is no such account.
+   */
+  setAdmin(email, isAdmin) {
+    const user = this.userByEmail(email);
+    if (!user) return null;
+    this.db.prepare('UPDATE users SET is_admin = ? WHERE id = ?').run(isAdmin ? 1 : 0, user.id);
+    return { id: user.id, email: user.email, isAdmin: Boolean(isAdmin), changed: (user.is_admin === 1) !== Boolean(isAdmin) };
+  }
+  listAdmins() {
+    return this.db.prepare('SELECT id, email FROM users WHERE is_admin = 1 ORDER BY id').all();
   }
   deleteSession(token) {
     this.db.prepare('DELETE FROM sessions WHERE token_hash = ?').run(hashToken(token));

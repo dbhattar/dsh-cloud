@@ -133,8 +133,9 @@ export function Shell({ email, src, workspaceName = 'Workspace' }: { email: stri
   const { limits, reload } = useLimits();
   // The welcome screen: shown once per user (the server remembers), and reopenable from the usage panel.
   const [welcome, setWelcome] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(false); // the server says; the admin routes check again on every request
   useEffect(() => {
-    fetch('/gw/api/me').then((r) => (r.ok ? r.json() : null)).then((me: { welcomed?: boolean } | null) => { if (me && me.welcomed === false) setWelcome(true); }, () => {});
+    fetch('/gw/api/me').then((r) => (r.ok ? r.json() : null)).then((me: { welcomed?: boolean; admin?: boolean } | null) => { if (me && me.welcomed === false) setWelcome(true); if (me?.admin) setIsAdmin(true); }, () => {});
   }, []);
   const closeWelcome = useCallback(() => {
     setWelcome(false);
@@ -196,6 +197,7 @@ export function Shell({ email, src, workspaceName = 'Workspace' }: { email: stri
     <div className={styles.shell}>
       <header className={styles.bar}>
         <BrandWordmark size={16} />
+        {isAdmin && <a className={styles.adminLink} href="/gw/admin">Admin</a>}
         {limits && (
           <button type="button" className={clsx(styles.usage, banner && styles[`chip_${banner.severity}`])} aria-expanded={panel} aria-haspopup="dialog" onClick={() => { if (!panel) reload(); setPanel((v) => !v); }}>
             {limits.tokens ? <>Today {compact.format(limits.tokens.day.used)}{limits.tokens.day.limit !== null && ` / ${compact.format(limits.tokens.day.limit)}`} tokens</> : 'Usage'}
