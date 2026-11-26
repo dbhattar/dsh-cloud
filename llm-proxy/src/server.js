@@ -86,6 +86,11 @@ export function createProxy({ cfg, store, log = console.log, fetchImpl = fetch, 
       // Users with a model request in flight or finished in the last 15 minutes (the gateway applies its own window).
       return sendJson(res, 200, { users: activity.snapshot(now(), 15 * 60 * 1000) });
     }
+    if (path === '/admin/stats' && req.method === 'GET') {
+      // For the gateway's admin overview: tokens per day, today's and this month's totals, the shared budget. Counts only, no content.
+      const days = Number(new URL(req.url, 'http://x').searchParams.get('days') ?? 14);
+      return sendJson(res, 200, { days: store.dailySeries(days, now()), global: globalReport() });
+    }
     const m = /^\/admin\/(tokens|usage)(?:\/([^/]*))?$/.exec(path);
     if (m?.[1] === 'tokens' && req.method === 'DELETE') {
       const id = userId(m[2]);

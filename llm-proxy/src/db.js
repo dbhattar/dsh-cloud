@@ -79,6 +79,22 @@ export class UsageStore {
     );
   }
 
+  /**
+   * Tokens, requests and distinct users per UTC day for the last `days` days ending today, oldest first, with a zero entry for a
+   * day nobody used (the admin overview charts it). Never more than 90 days.
+   */
+  dailySeries(days = 14, now = Date.now()) {
+    const n = Math.min(90, Math.max(1, Math.trunc(days) || 14));
+    const dayOf = (offset) => new Date(now - offset * 86_400_000).toISOString().slice(0, 10);
+    const rows = new Map(
+      this.db
+        .prepare('SELECT day, SUM(input_tokens + output_tokens) AS tokens, SUM(requests) AS requests, COUNT(DISTINCT user_id) AS users FROM usage WHERE day >= ? GROUP BY day')
+        .all(dayOf(n - 1))
+        .map((r) => [r.day, { tokens: Number(r.tokens), requests: Number(r.requests), users: Number(r.users) }]),
+    );
+    return Array.from({ length: n }, (_, i) => dayOf(n - 1 - i)).map((day) => ({ day, ...(rows.get(day) ?? { tokens: 0, requests: 0, users: 0 }) }));
+  }
+
   /** Per-user totals for scripts/usage.sh. */
   allUsed(now = Date.now()) {
     const ids = this.db.prepare('SELECT user_id FROM tokens UNION SELECT user_id FROM usage ORDER BY user_id').all();

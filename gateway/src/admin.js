@@ -1,4 +1,5 @@
 import { adminPage } from './pages.js';
+import { createOverview } from './stats.js';
 
 /**
  * The admin panel's routes, as one table. The server dispatches every /gw/admin request through `handleAdmin`, which checks the
@@ -13,10 +14,12 @@ export const ADMIN_PREFIX = '/gw/admin';
 /** Headers for every admin response: the panel is never shown inside another page. */
 const ADMIN_HEADERS = { 'content-security-policy': "frame-ancestors 'none'", 'x-frame-options': 'DENY' };
 
-export function adminRoutes({ store }) {
+export function adminRoutes({ store, overview = async () => ({}) }) {
   return [
     { method: 'GET', path: '/gw/admin', page: true, handle: ({ admin }) => ({ html: adminPage({ email: admin.email }) }) },
     { method: 'GET', path: '/gw/admin/api/me', handle: ({ admin }) => ({ json: { id: admin.id, email: admin.email } }) },
+    // The numbers on the overview page, each section gathered on its own (stats.js).
+    { method: 'GET', path: '/gw/admin/api/overview', handle: async () => ({ json: await overview() }) },
     {
       // What admins have done: grants and revokes, invites. Newest first. Details are the audit detail, which never holds content.
       method: 'GET',
@@ -35,8 +38,8 @@ export function adminRoutes({ store }) {
  * Signed out: the page redirects to sign-in and the API says 401. Signed in but not an admin: 404 for everything, so the panel's
  * existence is not confirmed to ordinary users, and the attempt is audited.
  */
-export function createAdminHandler({ store, audit, userOf, clientIp, send, json }) {
-  const routes = adminRoutes({ store });
+export function createAdminHandler({ store, cfg, manager, audit, userOf, clientIp, send, json }) {
+  const routes = adminRoutes({ store, overview: createOverview({ store, manager, cfg }) });
   return async function handleAdmin(req, res, path) {
     const route = routes.find((r) => r.method === req.method && r.path === path);
     const user = userOf(req);

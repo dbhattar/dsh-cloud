@@ -72,6 +72,38 @@ export class Store {
       .all(...args, Math.min(1000, Math.max(1, limit)));
     return rows.map((r) => ({ ts: r.ts, event: r.event, userId: r.user_id, ip: r.ip, detail: JSON.parse(r.detail) }));
   }
+  // ---- aggregates for the admin overview (counts only; nothing here reads content) ----
+  /** { total, admins, newSince(ts) }: accounts and how many were created since each given time. */
+  userCounts(since = []) {
+    const one = (sql, ...a) => Number(this.db.prepare(sql).get(...a).n);
+    return { total: one('SELECT COUNT(*) AS n FROM users'), admins: one('SELECT COUNT(*) AS n FROM users WHERE is_admin = 1'), created: since.map((t) => one('SELECT COUNT(*) AS n FROM users WHERE created_at >= ?', t)) };
+  }
+  /** Email by user id, for naming users in the overview tables. */
+  emailsById() {
+    return new Map(this.db.prepare('SELECT id, email FROM users').all().map((u) => [Number(u.id), u.email]));
+  }
+  /** Distinct users with a sign-in, sign-up or sandbox start since `since`: who was active. */
+  activeUsers(since) {
+    return Number(this.db.prepare("SELECT COUNT(DISTINCT user_id) AS n FROM audit WHERE ts >= ? AND user_id IS NOT NULL AND event IN ('login.ok', 'signup.ok', 'sandbox.start')").get(since).n);
+  }
+  /** Audit rows since `since` counted by event and, where there is one, the reason or "by" in the detail. */
+  auditCounts(since) {
+    return this.db
+      .prepare("SELECT event, COALESCE(json_extract(detail, '$.reason'), json_extract(detail, '$.by')) AS why, COUNT(*) AS n FROM audit WHERE ts >= ? GROUP BY event, why")
+      .all(since)
+      .map((r) => ({ event: r.event, why: r.why ?? null, n: Number(r.n) }));
+  }
+  /** Milliseconds to ready of the sandbox starts since `since` (newest first, at most `limit`), with whether the start resumed a stopped one. */
+  startTimes(since, limit = 5000) {
+    return this.db
+      .prepare("SELECT json_extract(detail, '$.ms') AS ms, json_extract(detail, '$.resumed') AS resumed FROM audit WHERE event = 'sandbox.start' AND ts >= ? ORDER BY id DESC LIMIT ?")
+      .all(since, limit)
+      .filter((r) => Number.isFinite(r.ms))
+      .map((r) => ({ ms: Number(r.ms), resumed: r.resumed === 1 || r.resumed === true }));
+  }
+  feedbackCount() {
+    return Number(this.db.prepare('SELECT COUNT(*) AS n FROM feedback').get().n);
+  }
   purgeAudit(before) {
     this.db.prepare('DELETE FROM audit WHERE ts < ?').run(before);
   }

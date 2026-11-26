@@ -50,7 +50,7 @@ export function createGateway({ cfg, store, manager, log = console.log, audit = 
   }
   const json = (res, status, obj) => send(res, status, JSON.stringify(obj), { 'content-type': 'application/json' });
 
-  const handleAdmin = createAdminHandler({ store, audit, userOf, clientIp, send, json });
+  const handleAdmin = createAdminHandler({ store, cfg, manager, audit, userOf, clientIp, send, json });
 
   function readForm(req) {
     return new Promise((resolve, reject) => {

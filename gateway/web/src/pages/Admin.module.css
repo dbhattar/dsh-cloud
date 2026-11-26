@@ -14,7 +14,7 @@
 .nav a:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 1px; }
 
 .main h1 { margin: 0 0 4px; font-size: 20px; font-weight: 600; }
-.lead { margin: 0 0 20px; font-size: 14px; line-height: 20px; color: var(--dsw-alias-label-secondary); }
+.lead { margin: 10px 0 20px; font-size: 14px; line-height: 20px; color: var(--dsw-alias-label-secondary); }
 .main h2 { margin: 24px 0 8px; font-size: 14px; font-weight: 600; }
 
 .table { width: 100%; border-collapse: collapse; font-size: 13px; }
@@ -25,3 +25,42 @@
 .note { margin: 24px 0 0; padding: 10px 12px; font-size: 12px; line-height: 18px; color: var(--dsw-alias-label-secondary); background: var(--dsw-alias-bg-layer-2); border-radius: var(--dsw-radius-md); }
 
 @media (max-width: 700px) { .body { grid-template-columns: 1fr; gap: 12px; } .nav { display: flex; } }
+
+.titleRow { display: flex; align-items: baseline; gap: 12px; margin-bottom: 16px; }
+.titleRow h1 { margin: 0; }
+.stamp { margin-left: auto; font-size: 12px; color: var(--dsw-alias-label-tertiary); }
+.linkButton { padding: 0; font: inherit; font-size: 12px; color: var(--dsw-alias-label-secondary); background: none; border: 0; text-decoration: underline; cursor: pointer; }
+.linkButton:hover:not(:disabled) { color: var(--dsw-alias-label-primary); }
+.linkButton:disabled { cursor: default; opacity: 0.6; text-decoration: none; }
+.linkButton:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 2px; }
+
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 8px; }
+.tile { padding: 12px; border: 0.5px solid var(--dsw-alias-border-l3); border-radius: var(--dsw-radius-md); background: var(--dsw-alias-bg-layer-2); }
+.tileLabel { font-size: 12px; color: var(--dsw-alias-label-secondary); }
+.tileValue { margin: 2px 0; font-size: 24px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.tileSub { font-size: 12px; line-height: 16px; color: var(--dsw-alias-label-tertiary); }
+
+.h3 { margin: 16px 0 6px; font-size: 13px; font-weight: 600; color: var(--dsw-alias-label-secondary); }
+.cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
+.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+.chart { margin: 8px 0; }
+.chartHead { display: flex; align-items: baseline; gap: 12px; }
+.chartHead h2 { margin: 0; }
+.chartHead .linkButton { margin-left: auto; }
+.plot { position: relative; }
+.svg { width: 100%; max-width: 640px; height: auto; display: block; overflow: visible; }
+.axis { stroke: var(--dsw-alias-border-l3); stroke-width: 1; }
+.tick { font-size: 10px; fill: var(--dsw-alias-label-tertiary); }
+.bar { fill: var(--dsw-alias-state-business-primary); opacity: 0.85; }
+.barHot { fill: var(--dsw-alias-state-business-primary); }
+.hit { fill: transparent; }
+.svg g:focus-visible { outline: none; }
+.svg g:focus-visible .hit { stroke: var(--dsw-alias-brand-primary); stroke-width: 2; }
+.tooltip { margin-top: 4px; font-size: 12px; color: var(--dsw-alias-label-primary); }
+
+.health { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; font-size: 13px; }
+.dotOk, .dotBad, .dotOff { display: inline-block; width: 8px; height: 8px; margin-right: 6px; border-radius: 50%; }
+.dotOk { background: var(--dsw-alias-state-success-primary); }
+.dotBad { background: var(--dsw-alias-state-error-primary); }
+.dotOff { background: var(--dsw-alias-border-l4); }
