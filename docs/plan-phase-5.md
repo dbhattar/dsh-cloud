@@ -46,7 +46,7 @@ Each task is one topic branch and one pull request, with tests and documentation
 
 | Task | Item | What and where | Verify |
 | --- | --- | --- | --- |
-| **P5-6 Our welcome and a curated UI** | 11, 12 | A one-screen welcome (what this is, limits, how work is saved, how to get code out) shown once, delivered through the harness's own first-run slot or the gateway shell (to verify which is feasible by config alone). Hide the build-id string and the harness Sign-in item; relabel the "Preview" badge; friendly model names. Plugins and the terminal stay. | Browser check as a fresh user; entrypoint tests. |
+| **P5-6 Our welcome and a curated UI** (done, see "P5-6 result") | 11, 12 | A one-screen welcome (what this is, limits, how work is saved, how to get code out) shown once, delivered through the harness's own first-run slot or the gateway shell (to verify which is feasible by config alone). Hide the build-id string and the harness Sign-in item; relabel the "Preview" badge; friendly model names. Plugins and the terminal stay. | Browser check as a fresh user; entrypoint tests. |
 | **P5-7 Invite links and clearer sign-up** (done, see "P5-7 result") | 1, 2 | `/gw/signup?invite=…`, links printed by `scripts/invite.sh`, redirect back after login, distinct invalid, used and expired messages, show-password. | Unit and browser tests. |
 | **P5-8 Email via Mailgun** | 3, 19 | A mail provider interface in the gateway with a Mailgun implementation (HTTP API) and a `log` provider; password reset, emailed invites, and a "your task finished" notice that uses the P5-1 busy signal. Rate-limit sends per user and per address; never put content, tokens or invite codes in logs, and use single-use expiring reset links. Handle API errors without breaking the request that triggered the mail (queue and retry briefly, then give up and audit). Document the Mailgun setup (domain, DNS records, API key, region) and `.env` settings. | Tests against a fake Mailgun HTTP server (request shape, auth header, failures, retries, no secrets in logs); one real send through the owner's Mailgun domain is a manual step, recorded in the doc. |
 | **P5-9 Waiting room** | 5 | When at capacity, show queue position and start automatically when a slot frees, instead of the refusal. | Docker case on the capacity suite. |
@@ -147,6 +147,27 @@ Tests: `tests/gateway/states.test.mjs` (every warning threshold, text and orderi
 - **Not done:** emailing the link (P5-8, needs Mailgun), password reset, email verification, and closing the gap that the invite code field is still visible when the link already carries one (it is editable on purpose, so a mistyped code can be fixed).
 
 Tests: `tests/gateway/signup.test.mjs` (11: `safeNext` matrix, invite states, link page, lookup limit, messages and what is kept, redirects, signed-in behaviour, the CLI), and `tests/ui/signup.test.mjs` (4, real browser against a gateway started in the test: the invite link flow landing on the requested page, a used link and a wrong code, Show and Hide plus keyboard order, sign-in returning to the remembered page). A mutation of `safeNext` (accepting `//host`) was caught by three tests.
+
+## P5-6 result: our welcome and a curated UI
+
+**Welcome.** A one-screen dialog shown once to each new user, in the gateway shell (not in the harness). It says what the workspace is, how work is saved and when it pauses, the limits that apply, privacy and safety, and getting work out. The numbers come from the live configuration (`policy` in `/gw/api/limits` plus the user's token limits), and only limits that are actually set are mentioned. The server remembers it (`users.welcomed_at`, added by an in-place migration; `GET /gw/api/me` returns `welcomed`, `POST /gw/api/welcome` records it, the first time wins), so it does not come back on another device. It can be reopened from the usage panel ("About this workspace"). Focus starts on the button, Escape closes it. Why the shell and not the harness: the harness's own first-run slot is the "Preview Notice" we already pre-acknowledge, and its copy is code, not config; the shell is ours, testable and the same for every harness version.
+
+**Curated harness, by configuration where the harness allows it** (`sandbox/entrypoint.sh`, `runner/`):
+- The model picker shows "Free models (automatic)" instead of the catalog's "Free Models Router": the model's `name` in the `llm-pi-ai` row, set from `DSH_MODEL_NAME` (runner setting `MODEL_DISPLAY_NAME`, with a friendly default for the free router; plain words only so it cannot break the YAML).
+- The Automation tasks entry is switched off (`ui-schedule` disabled), because a stopped workspace cannot run a schedule (plan idea 20). The agent's own scheduling tool is untouched.
+- Plugins, More and the terminal stay, as decided for developers.
+
+**Curated harness, by small edits in the shell** (`gateway/web/src/curate.ts`), because the harness's labels are compiled-in text with no setting: the "DSH Local Build" label becomes `WORKSPACE_NAME` (default "Workspace"), the build id under it and the "Preview" badge are hidden, and the blank-session headline "Into the Unknown" becomes "What would you like to build?". The frame is same-origin, so the shell injects one style rule and a small observer into the harness document. It works from the harness's rendered class names (`hash_name`, matched on the readable part) and one text value; if the harness changes either, the edits stop applying and the harness's own wording shows (nothing breaks). `tests/phase5/welcome.test.mjs` notices.
+
+**What was found and left alone.** The sidebar label and version come from code (`brand.localBuild`, `DSH_CLIENT_VERSION`, which the harness build always sets), so a build-time environment variable cannot remove them; `DSH_CLIENT_TITLE` only affects the page title. The "deepseek HARNESS" wordmark in the top bar and the login page is the harness's brand and was kept (see its `BRAND_GUIDELINES.md` before changing it). "Preview" was removed as a badge only; the harness is still labelled preview upstream.
+
+**Known gaps.**
+- The welcome says Git push and download "are still being built"; update it when P5-4 (tools) and files-out land.
+- English only. The curation edits are English text matches.
+- `curate.ts` depends on the harness's markup; there is no contract with the harness for it.
+- A fresh user sees the welcome before the workspace has finished loading; that is intended (they read while it starts).
+
+Tests: `tests/gateway/welcome.test.mjs` (5: the stored flag, migration of an old database, the endpoints, the policy payload, the shell's name), `tests/ui/welcome.test.mjs` (3, real browser: the welcome sentences, the curation on a mock harness page including re-renders and applying twice, and the welcome flow in the shell: once, "Got it", not again, reopened), entrypoint and runner cases for the model name and the disabled entry, and the live suite `tests/phase5/welcome.test.mjs` against the real harness (patch contents, the welcome once, and the curated page). Also fixed in passing: the browser helper's `signIn` broke when P5-7 added the Show button to the form.
 
 ## Idea list (effort: S under a day, M a few days, L a week or more)
 

@@ -25,6 +25,8 @@ export function loadConfig(env = process.env) {
     // Setting it enables metering. The real key lives only in the proxy.
     llmAdminSocket,
     llmAdminSecret,
+    // What the workspace is called on screen where the harness would say "DSH Local Build".
+    workspaceName: (env.WORKSPACE_NAME || 'Workspace').slice(0, 40),
     sandboxPort: 3080,
     idleSeconds: int('IDLE_SECONDS', 1800),
     reapIntervalSeconds: int('REAP_INTERVAL_SECONDS', 30),

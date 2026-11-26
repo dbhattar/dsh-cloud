@@ -52,6 +52,12 @@ if [ -r "$WELCOME_VERSION_FILE" ]; then
       ;;
   esac
 fi
+# Scheduled tasks need the workspace to be running at the scheduled time, and a stopped workspace is not (phase 5 plan, idea 20), so
+# the Automation tasks entry is hidden rather than offering something that would silently not run.
+{
+  echo "- id: ui-schedule"
+  echo "  disabled: true"
+} >> "$PATCH"
 # Model routing: the harness talks to llm-proxy (LLM_BASE_URL) with this user's token (LLM_PROXY_TOKEN).
 # The real provider key is never present in the sandbox.
 if [ -n "${LLM_PROXY_TOKEN:-}" ] && [ -n "${LLM_BASE_URL:-}" ]; then
@@ -67,6 +73,11 @@ if [ -n "${LLM_PROXY_TOKEN:-}" ] && [ -n "${LLM_BASE_URL:-}" ]; then
     echo "        baseURL: \"$LLM_BASE_URL\""
     echo "        models:"
     echo "          - id: \"$MODEL\""
+    # A friendly name in the model picker (config: the model's `name`). Plain words only, so it cannot break the YAML.
+    case "${DSH_MODEL_NAME:-}" in
+      ""|[!A-Za-z0-9]*|*[!A-Za-z0-9\ ._\(\)+/-]*) ;;
+      *) echo "            name: \"$DSH_MODEL_NAME\"" ;;
+    esac
   } >> "$PATCH"
 fi
 set -- --patch "$PATCH"

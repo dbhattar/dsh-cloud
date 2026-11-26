@@ -398,6 +398,8 @@ export class SandboxManager {
       : null;
     return {
       workspace: { state: this.state(userId) },
+      // The limits as plain settings (not the user's own numbers), so the welcome screen can say what applies. 0 means no limit.
+      policy: { idleSeconds: cfg.idleSeconds, maxBusySeconds: cfg.maxBusySeconds, maxRunSeconds: cfg.maxRunSeconds, maxDiskMb: cfg.maxDiskMb },
       tokens,
       storage,
       run,

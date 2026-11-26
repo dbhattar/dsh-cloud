@@ -2,7 +2,10 @@ import clsx from 'clsx';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { BrandWordmark } from '../BrandWordmark.tsx';
 import { Button } from '../controls.tsx';
+import { curate } from '../curate.ts';
 import { FEEDBACK_CLOSE } from './Feedback.tsx';
+import type { Policy } from './welcome-text.ts';
+import { Welcome } from './Welcome.tsx';
 import styles from './Shell.module.css';
 
 const HOOKED = '__gwOpenHooked';
@@ -23,6 +26,7 @@ interface Notice { code: string; severity: 'info' | 'warning' | 'error'; title: 
 interface UsageWindow { used: number; limit: number | null; resetsAt: string }
 interface Limits {
   workspace: { state: string };
+  policy?: Policy;
   tokens: { day: UsageWindow; month: UsageWindow } | null;
   storage: { usedBytes: number; limitBytes: number | null } | null;
   run: { maxSeconds: number; secondsLeft: number } | null;
@@ -88,7 +92,7 @@ function ConfirmButton({ label, confirmLabel, busy, onConfirm, className }: { la
   );
 }
 
-function UsagePanel({ limits, busy, onStop, onRestart }: { limits: Limits; busy: 'stop' | 'restart' | null; onStop: () => void; onRestart: () => void }) {
+function UsagePanel({ limits, busy, onStop, onRestart, onWelcome }: { limits: Limits; busy: 'stop' | 'restart' | null; onStop: () => void; onRestart: () => void; onWelcome: () => void }) {
   const t = limits.tokens;
   const dayPct = t?.day.limit ? (t.day.used / t.day.limit) * 100 : null;
   const monthPct = t?.month.limit ? (t.month.used / t.month.limit) * 100 : null;
@@ -116,16 +120,26 @@ function UsagePanel({ limits, busy, onStop, onRestart }: { limits: Limits; busy:
         <ConfirmButton label="Stop workspace" confirmLabel="Click again to stop" busy={busy === 'stop'} onConfirm={onStop} />
       </div>
       <p className={styles.fine}>Restarting or stopping ends any command or task that is running. Your files and sessions are kept.</p>
+      <button type="button" className={styles.linkButton} onClick={onWelcome}>About this workspace</button>
     </div>
   );
 }
 
 /** Authenticated top-level page: account bar + the harness UI in a same-origin iframe. */
-export function Shell({ email, src }: { email: string; src: string }) {
+export function Shell({ email, src, workspaceName = 'Workspace' }: { email: string; src: string; workspaceName?: string | undefined }) {
   const [feedback, setFeedback] = useState<string | null>(null);
   const close = useCallback(() => setFeedback(null), []);
   const frameRef = useRef<HTMLIFrameElement>(null);
   const { limits, reload } = useLimits();
+  // The welcome screen: shown once per user (the server remembers), and reopenable from the usage panel.
+  const [welcome, setWelcome] = useState(false);
+  useEffect(() => {
+    fetch('/gw/api/me').then((r) => (r.ok ? r.json() : null)).then((me: { welcomed?: boolean } | null) => { if (me && me.welcomed === false) setWelcome(true); }, () => {});
+  }, []);
+  const closeWelcome = useCallback(() => {
+    setWelcome(false);
+    fetch('/gw/api/welcome', { method: 'POST' }).catch(() => {}); // no-op if already recorded; a failure just shows it again next time
+  }, []);
   const [panel, setPanel] = useState(false);
   const [busy, setBusy] = useState<'stop' | 'restart' | null>(null);
   const [frameKey, setFrameKey] = useState(0); // bumping it reloads the workspace frame
@@ -142,8 +156,13 @@ export function Shell({ email, src }: { email: string; src: string }) {
   // Same origin, so the shell can wrap the harness window's open(). Re-applied on every iframe load.
   const hook = useCallback((frame: HTMLIFrameElement) => {
     const win = frame.contentWindow;
-    // A navigated iframe keeps the same WindowProxy but gets a fresh document, so mark the document's own open().
-    if (!win || (win as unknown as Record<string, unknown>)[HOOKED]) return;
+    if (!win) return;
+    // Curate every document the frame shows. This must come before the guard below: a frame's first real page can reuse the
+    // window the frame started with (same origin), which already carries the marker, and would otherwise never be curated.
+    // curate() is idempotent per document.
+    try { curate(win.document, { workspaceName, headline: 'What would you like to build?' }); } catch { /* the page is not ready or not ours: leave the harness as it is */ }
+    // The marker is on the window, and so is the wrapped open(): both survive a reused window, and a fresh one gets neither.
+    if ((win as unknown as Record<string, unknown>)[HOOKED]) return;
     (win as unknown as Record<string, unknown>)[HOOKED] = true;
     const original = win.open.bind(win);
     win.open = (url, ...rest) => {
@@ -153,7 +172,7 @@ export function Shell({ email, src }: { email: string; src: string }) {
       }
       return original(url, ...rest);
     };
-  }, []);
+  }, [workspaceName]);
 
   useEffect(() => { if (frameRef.current) hook(frameRef.current); }, [hook]);
 
@@ -186,7 +205,8 @@ export function Shell({ email, src }: { email: string; src: string }) {
         <span className={styles.email}>{email}</span>
         <form method="post" action="/gw/logout"><Button variant="outline" className={styles.signout}>Sign out</Button></form>
       </header>
-      {panel && limits && <UsagePanel limits={limits} busy={busy} onStop={() => void post('/gw/api/stop?hold=1', 'stop')} onRestart={() => void post('/gw/api/restart', 'restart')} />}
+      {panel && limits && <UsagePanel limits={limits} busy={busy} onStop={() => void post('/gw/api/stop?hold=1', 'stop')} onRestart={() => void post('/gw/api/restart', 'restart')} onWelcome={() => { setPanel(false); setWelcome(true); }} />}
+      {welcome && <Welcome policy={limits?.policy ?? null} tokens={limits?.tokens ?? null} onClose={closeWelcome} />}
       {banner && !panel && (
         <div className={clsx(styles.banner, styles[`sev_${banner.severity}`])} role={limits?.problem ? 'alert' : 'status'} data-problem={banner.code}>
           <strong>{banner.title}.</strong> {banner.message}

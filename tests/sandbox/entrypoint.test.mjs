@@ -51,8 +51,22 @@ test('policy: the whole patch never mentions danger-full-access, with or without
   assert.ok(row(withModel, 'llm-pi-ai'), 'the model rows are still there');
 });
 
-test('every patch row has an id and a config (a malformed row would change a different plugin)', () => {
-  for (const r of rows(patchFor())) assert.match(r.text, /^- id: [\w-]+\n  config:/, r.id);
+test('every patch row has an id and either a config or disabled: true (a malformed row would change a different plugin)', () => {
+  for (const r of rows(patchFor())) assert.match(r.text, /^- id: [\w-]+\n  (config:|disabled: true\n)/, r.id);
+});
+
+// ---- curated UI (P5-6) ----
+test('curated UI: the Automation tasks entry is switched off, because a stopped workspace cannot run a schedule', () => {
+  assert.match(row(patchFor(), 'ui-schedule').text, /^- id: ui-schedule\n  disabled: true\n$/);
+});
+
+test('curated UI: the model picker shows the friendly name when one is given, and nothing odd can get into the YAML', () => {
+  const withModel = (name) => patchFor({ LLM_PROXY_TOKEN: 'dshu_x', LLM_BASE_URL: 'http://llm-proxy:8081/v1', ...(name === undefined ? {} : { DSH_MODEL_NAME: name }) });
+  assert.match(withModel('Free models (automatic)'), /- id: "openrouter\/free"\n            name: "Free models \(automatic\)"/);
+  assert.ok(!/name: "/.test(withModel()), 'no name when none is set');
+  for (const bad of ['', 'bad"quote', 'new\nline', 'x: y\n- id: other', '$(id)', 'back`tick', ' leading space', 'semi;colon', "it's"]) {
+    assert.ok(!/ name: "/.test(withModel(bad)), `not accepted: ${JSON.stringify(bad)}`);
+  }
 });
 
 // ---- first-run "Preview Notice" ----

@@ -30,8 +30,8 @@ function render(title, data) {
 }
 
 /** Authenticated top-level page: account bar + the harness UI in a same-origin iframe. */
-export function appShellPage({ email, src }) {
-  return render('DeepSeek Harness', { page: 'shell', email, src });
+export function appShellPage({ email, src, workspaceName = 'Workspace' }) {
+  return render('DeepSeek Harness', { page: 'shell', email, src, workspaceName });
 }
 
 /**

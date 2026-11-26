@@ -471,3 +471,13 @@ test('runtime warning: plain runc (or the daemon default) warns that the shell t
   assert.equal(runtimeWarning(cfgOf({})) !== null, true, 'the default is runc, so it warns');
   for (const rt of ['runsc', 'kata']) assert.equal(runtimeWarning(cfgOf({ SANDBOX_RUNTIME: rt })), null, rt);
 });
+
+test('model display name: a friendly default for the free router, an override, validation, and it reaches the sandbox environment', () => {
+  assert.equal(cfgOf().modelDisplayName, 'Free models (automatic)');
+  assert.equal(cfgOf({ MODEL_DISPLAY_NAME: '' }).modelDisplayName, 'Free models (automatic)', 'empty means default (compose passes an empty value)');
+  assert.equal(cfgOf({ MODEL_DISPLAY_NAME: 'Team model' }).modelDisplayName, 'Team model');
+  assert.equal(cfgOf({ DEFAULT_MODEL: 'deepseek/deepseek-chat' }).modelDisplayName, '', 'no invented name for other models');
+  for (const bad of ['a"b', 'x\ny', '- id: z', '$(id)', 'x'.repeat(61)]) assert.throws(() => cfgOf({ MODEL_DISPLAY_NAME: bad }), /MODEL_DISPLAY_NAME/, bad);
+  assert.ok(buildSpec(cfgOf(), 1).Env.includes('DSH_MODEL_NAME=Free models (automatic)'));
+  assert.ok(!buildSpec(cfgOf({ DEFAULT_MODEL: 'other/model' }), 1).Env.some((e) => e.startsWith('DSH_MODEL_NAME=')));
+});
