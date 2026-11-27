@@ -2,6 +2,8 @@
 
 Status: **design and task breakdown (2026-11-26); nothing here is built.** The first users are cybersecurity professionals. This document records that decision, what it changes, the risks it adds, the plugins it needs, and the tasks, in the order they should be done. Facts about the sandbox, the tools and the harness were measured or read in source and are in [research-security-tooling.md](research-security-tooling.md); anything not checked is marked **to verify**. Builds on [plan-phase-5.md](plan-phase-5.md) (the experience work and the admin panel, most of which is done; email, the waiting room, per-user overrides and deleting a user's data are still open there) and [plan-phase-4.md](plan-phase-4.md) (isolation). Parent plan: [plan.md](plan.md). Working rules: [../AGENTS.md](../AGENTS.md).
 
+The shortest route to a first real use (testing the owner's own two staging web apps and reading their GitHub repositories) is in [plan-first-security-test.md](plan-first-security-test.md); it takes a subset of the tasks below in a different order.
+
 ## Context
 
 Phase 5 assumed developers who build software and deferred the toolbox (tasks P5-4 and P5-5). The first real audience is different: security professionals who analyse, review and test, and who handle other people's confidential material. Two things follow.
