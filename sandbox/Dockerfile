@@ -38,13 +38,16 @@ RUN python3 -m venv /opt/pytools && /opt/pytools/bin/pip install --no-cache-dir 
 # dsh-git: gives git a read-only credential for one host (GitHub), typed hidden in a terminal and never through the chat (docs/github-access.md).
 COPY --chmod=0755 bin/dsh-git /usr/local/bin/dsh-git
 
+# Methodology skills (docs/plan-first-security-test.md, step 5), read by the harness through DSH_BUNDLED_SKILL_DIR.
+COPY skills/ /opt/dsh-skills/
+
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN useradd --home-dir /workspace --no-create-home --shell /bin/bash dsh \
  && mkdir -p /data/dsh /workspace \
  && chown -R dsh:dsh /data /workspace
 USER dsh
 # HOME is the persisted workspace volume, so projects created under ~ survive container recreation.
-ENV DSH_HOME=/data/dsh HOME=/workspace
+ENV DSH_HOME=/data/dsh HOME=/workspace DSH_BUNDLED_SKILL_DIR=/opt/dsh-skills
 # The agent's own installs go to the persisted workspace volume. The system site-packages is read-only, so `pip install` falls back to a
 # user install under ~/.local on its own; PIP_BREAK_SYSTEM_PACKAGES only lets it past Debian's "externally managed" notice, which is about
 # the system site (virtualenvs are unaffected, and PIP_USER is deliberately not set because it breaks them). ~/.local/bin is on PATH. The
