@@ -5,10 +5,10 @@ Status: **plan approved (2026-11-27); not started.** This is the shortest route 
 
 ## Context
 
-[plan-phase-6.md](plan-phase-6.md) designs a whole workspace for security professionals. The owner asked for the shortest route from what you have now (dsh-cloud running locally in the Lima VM under gVisor, the owner as the only user) to a **first real use: black-box testing of the owner's two web apps, plus reading their GitHub repos**. The owner's answers:
+[plan-phase-6.md](plan-phase-6.md) designs a whole workspace for security professionals. The owner asked for the shortest route from what exists now (dsh-cloud running locally in the Lima VM under gVisor, the owner as the only user) to a **first real use: black-box testing of the owner's two web apps, plus reading their GitHub repos**. The owner's answers:
 
 - The apps run at **public HTTPS URLs**, and it is acceptable to test **staging or a local copy only** (not production).
-- First test type: **black-box web testing**, and you want to **connect the GitHub repo**; code arrives by **git clone over HTTPS**.
+- First test type: **black-box web testing**, and the owner wants to **connect the GitHub repo**; code arrives by **git clone over HTTPS**.
 
 So reachability needs no new network path (the egress proxy already reaches public hosts on 80 and 443), and the risky parts of phase 6 (per-user scope with ownership verification, attestation, multi-tenant conduct) are **not needed yet** because the only user is the owner. What is missing is tools, a few safety limits for pointing tools at a live site, the repo connection, and a method.
 
@@ -50,7 +50,7 @@ Open a workspace in the local stack, have the agent (or the terminal) run one `c
 ### 6. The first engagement: calibrate, then the apps (M, mostly running, little code)
 1. **Calibrate on a published, intentionally vulnerable public target** (whose owner invites testing; check it is still up and its rules) to prove the tools, the limits and the agent's method find known issues. This is the check that the whole chain works before it touches the apps.
 2. Write `ENGAGEMENT.md` in the workspace (the two staging URLs, rules, rate ceiling, test accounts, stop conditions); list the same two domains in `EGRESS_ALLOW_HOSTS`.
-3. Run the playbook per app: passive recon (headers, TLS with `testssl.sh`, fingerprint with `httpx`/`whatweb`), content discovery with `ffuf` (a small wordlist shipped or fetched from GitHub into the volume), `nuclei` with intrusive and denial-of-service tags excluded, authenticated checks with test accounts (access control between users, session and token handling), and repo review (`semgrep`, `gitleaks`, dependency scan). App-specific checks once you tell me the stacks.
+3. Run the playbook per app: passive recon (headers, TLS with `testssl.sh`, fingerprint with `httpx`/`whatweb`), content discovery with `ffuf` (a small wordlist shipped or fetched from GitHub into the volume), `nuclei` with intrusive and denial-of-service tags excluded, authenticated checks with test accounts (access control between users, session and token handling), and repo review (`semgrep`, `gitleaks`, dependency scan). App-specific checks once the stacks are known.
 4. Output: a Markdown findings report with severity and evidence in the workspace. Structured findings and the CVSS calculator (phase 6 S6-7 and S6-10) come later.
 5. **Model check:** run the same short prompt set against the free router and, if results are poor or refused, a paid model; record the outcome (also feeds phase 6 S6-4).
 6. Write what happened (what worked, what the agent got wrong, what to improve) into `docs/`, as AGENTS.md requires.
