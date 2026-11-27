@@ -1,6 +1,7 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import http from 'node:http';
 import { Limiter } from './limits.js';
+import { createPolicies, policyOf } from './policy.js';
 import { ActivityTracker } from './activity.js';
 import { usageReport, windows } from './quota.js';
 import { SseUsageScanner, usageOf } from './usage-parse.js';
@@ -17,6 +18,9 @@ const digest = (s) => createHash('sha256').update(s).digest();
  */
 export function createProxy({ cfg, store, log = console.log, fetchImpl = fetch, now = Date.now }) {
   const limiter = new Limiter({ perMinute: cfg.rateLimitPerMinute, maxConcurrent: cfg.maxConcurrent, now });
+  // Admin-editable settings (policy.js): the stored overrides are applied to cfg now and on every change.
+  const policies = createPolicies({ cfg, store, log, onChange: (c) => limiter.configure({ perMinute: c.rateLimitPerMinute, maxConcurrent: c.maxConcurrent }) });
+  policies.load();
   const adminDigest = digest(cfg.adminSecret);
   const activity = new ActivityTracker();
   // Audit lines: one JSON object per event, no request or model content. Quota hits repeat on every blocked
@@ -85,6 +89,25 @@ export function createProxy({ cfg, store, log = console.log, fetchImpl = fetch, 
     if (path === '/admin/activity' && req.method === 'GET') {
       // Users with a model request in flight or finished in the last 15 minutes (the gateway applies its own window).
       return sendJson(res, 200, { users: activity.snapshot(now(), 15 * 60 * 1000) });
+    }
+    // Policies: the settings an admin may change, their values and where each comes from.
+    if (path === '/admin/policy' && req.method === 'GET') return sendJson(res, 200, { settings: policies.list() });
+    const pm = /^\/admin\/policy\/([A-Za-z]{1,40})$/.exec(path);
+    if (pm && (req.method === 'PUT' || req.method === 'DELETE')) {
+      if (!policyOf(pm[1])) return fail(res, 404, 'not_found', 'No such setting.');
+      let out;
+      if (req.method === 'PUT') {
+        let body;
+        try {
+          body = JSON.parse((await readBody(req, 4096)).toString() || '{}');
+        } catch {
+          return fail(res, 400, 'invalid_request', 'Body must be JSON.');
+        }
+        out = policies.set(pm[1], body.value, { confirmed: body.confirm === true });
+      } else out = policies.reset(pm[1]);
+      if (!out.ok) return fail(res, out.status, out.error, out.message);
+      audit(req.method === 'PUT' ? 'policy.set' : 'policy.reset', { key: pm[1], from: out.from, to: out.to });
+      return sendJson(res, 200, { key: pm[1], from: out.from, to: out.to, settings: policies.list() });
     }
     if (path === '/admin/stats' && req.method === 'GET') {
       // For the gateway's admin overview: tokens per day, today's and this month's totals, the shared budget. Counts only, no content.

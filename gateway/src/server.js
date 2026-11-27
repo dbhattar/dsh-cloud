@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import http from 'node:http';
 import { ADMIN_PREFIX, createAdminHandler } from './admin.js';
+import { createPolicies } from './policy.js';
 import { Audit } from './audit.js';
 import { MIN_PASSWORD, RateLimiter, hashPassword, normalizeEmail, parseCookies, safeNext, verifyPassword } from './auth.js';
 import { FEEDBACK_KINDS, WEB_DIST, appShellPage, feedbackPage, launchingPage, loginPage } from './pages.js';
@@ -19,6 +20,9 @@ const INVITE_MESSAGES = {
 const ASSET_TYPES = { '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.woff2': 'font/woff2', '.svg': 'image/svg+xml' };
 
 export function createGateway({ cfg, store, manager, log = console.log, audit = new Audit({ store, log }) }) {
+  // Admin-editable settings: the stored overrides are applied to cfg now, and again on every change (policy.js).
+  const policies = createPolicies({ cfg, store, log });
+  policies.load();
   const loginLimiter = new RateLimiter(10, 15 * 60 * 1000);
   const feedbackLimiter = new RateLimiter(10, 60 * 60 * 1000);
   const signupLimiter = new RateLimiter(10, 60 * 60 * 1000);
@@ -51,7 +55,7 @@ export function createGateway({ cfg, store, manager, log = console.log, audit = 
   }
   const json = (res, status, obj) => send(res, status, JSON.stringify(obj), { 'content-type': 'application/json' });
 
-  const handleAdmin = createAdminHandler({ store, cfg, manager, audit, userOf, clientIp, send, json, sessionToken: (req) => parseCookies(req.headers.cookie)[COOKIE], readJson, log });
+  const handleAdmin = createAdminHandler({ store, cfg, manager, audit, policies, userOf, clientIp, send, json, sessionToken: (req) => parseCookies(req.headers.cookie)[COOKIE], readJson, log });
 
   /** A small JSON request body (the admin actions); rejects with status 400 when it is not JSON. */
   function readJson(req) {

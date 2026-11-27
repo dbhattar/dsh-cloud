@@ -28,7 +28,17 @@ export class LlmProxyClient {
     const data = body ? JSON.stringify(body) : undefined;
     const headers = { authorization: `Bearer ${this.adminSecret}`, ...(data ? { 'content-type': 'application/json', 'content-length': Buffer.byteLength(data) } : {}) };
     const { status, text } = await this.request(method, path, headers, data);
-    if (status < 200 || status > 299) throw new Error(`llm-proxy ${method} ${path} -> ${status}`);
+    if (status < 200 || status > 299) {
+      // Keep the status and the proxy's own explanation (never anything secret: it is the proxy's plain error), for callers that show it.
+      const err = new Error(`llm-proxy ${method} ${path} -> ${status}`);
+      err.status = status;
+      try {
+        err.detail = JSON.parse(text)?.error ?? null;
+      } catch {
+        err.detail = null;
+      }
+      throw err;
+    }
     return status === 204 ? null : JSON.parse(text);
   }
 
@@ -44,6 +54,17 @@ export class LlmProxyClient {
   /** { users: [{ userId, inflight, lastAt }] } for users with a model request in flight or one in the last 15 minutes. */
   activity() {
     return this.#call('GET', '/admin/activity');
+  }
+  /** The proxy's admin-editable settings with their values: { settings: [...] }. */
+  policy() {
+    return this.#call('GET', '/admin/policy');
+  }
+  /** Change one proxy setting. Rejects with the proxy's status in the message when it refuses (a bad value, a missing confirmation). */
+  setPolicy(key, value, confirm = false) {
+    return this.#call('PUT', `/admin/policy/${key}`, { value, ...(confirm ? { confirm: true } : {}) });
+  }
+  resetPolicy(key) {
+    return this.#call('DELETE', `/admin/policy/${key}`);
   }
   /** { days: [{ day, tokens, requests, users }], global } for the admin overview. */
   stats(days = 14) {

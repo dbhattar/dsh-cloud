@@ -10,6 +10,11 @@ export class Limiter {
     this.stamps = new Map(); // userId -> request timestamps in the last minute
     this.active = new Map(); // userId -> in-flight count
   }
+  /** Take new limits; requests already counted keep counting. */
+  configure({ perMinute, maxConcurrent }) {
+    this.perMinute = perMinute;
+    this.maxConcurrent = maxConcurrent;
+  }
   acquire(userId) {
     const t = this.now();
     const recent = (this.stamps.get(userId) ?? []).filter((s) => t - s < 60_000);

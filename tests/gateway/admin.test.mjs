@@ -73,8 +73,8 @@ async function gateway() {
 test('guard: every admin route refuses a signed-out visitor and an ordinary user, and serves an admin', async () => {
   const g = await gateway();
   try {
-    const routes = adminRoutes({ store: g.store, users: g.usersStub, records: g.usersStub });
-    assert.ok(routes.length >= 20, 'the table has the routes, including the account pages and actions');
+    const routes = adminRoutes({ store: g.store, users: g.usersStub, records: g.usersStub, policies: g.usersStub });
+    assert.ok(routes.length >= 24, 'the table has the routes, including the account pages and actions');
     assert.ok(routes.some((r) => r.method === 'POST') && routes.some((r) => r.path.includes(':id')));
     for (const r of routes) {
       const path = samplePath(r);

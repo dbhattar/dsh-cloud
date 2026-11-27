@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { loadConfig } from '../../llm-proxy/src/config.js';
 import { UsageStore } from '../../llm-proxy/src/db.js';
 import { Limiter } from '../../llm-proxy/src/limits.js';
+import { POLICIES, createPolicies, crossCheck, policyOf, validate } from '../../llm-proxy/src/policy.js';
 import { windows } from '../../llm-proxy/src/quota.js';
 import { createProxy } from '../../llm-proxy/src/server.js';
 import { SseUsageScanner, usageOf } from '../../llm-proxy/src/usage-parse.js';
@@ -471,7 +472,7 @@ test('the user listener has no admin routes, even for a caller holding the admin
   const h = await harness();
   try {
     const token = h.store.issueToken(1);
-    for (const [method, path, body] of [['GET', '/admin/usage/1'], ['GET', '/admin/usage'], ['GET', '/admin/stats?days=7'], ['POST', '/admin/tokens', { userId: 1 }], ['DELETE', '/admin/tokens/1'], ['GET', '/admin']]) {
+    for (const [method, path, body] of [['GET', '/admin/usage/1'], ['GET', '/admin/usage'], ['GET', '/admin/stats?days=7'], ['GET', '/admin/policy'], ['PUT', '/admin/policy/dailyTokenQuota', { value: 5000 }], ['DELETE', '/admin/policy/dailyTokenQuota'], ['POST', '/admin/tokens', { userId: 1 }], ['DELETE', '/admin/tokens/1'], ['GET', '/admin']]) {
       for (const bearer of [ADMIN, token, undefined]) {
         const r = await h.call(path, { token: bearer, method, body });
         assert.equal(r.status, 404, `${method} ${path} with ${bearer === ADMIN ? 'admin secret' : bearer ? 'user token' : 'no auth'}`);
@@ -686,6 +687,123 @@ test('stats: tokens, requests and users per day with zero days filled in, bounde
     const ok = await (await h.adminCall('/admin/stats?days=3')).json();
     assert.equal(ok.days.length, 3);
     assert.ok('global' in ok);
+  } finally {
+    await h.close();
+  }
+});
+
+// ---- admin-editable policies (P5-15) ----
+test('policy validation: whole numbers inside the bounds; 0 only where it means "off" and only when confirmed', () => {
+  const daily = policyOf('dailyTokenQuota');
+  assert.deepEqual(validate(daily, 50_000), { ok: true, value: 50_000 });
+  assert.deepEqual(validate(daily, ' 50000 '), { ok: true, value: 50_000 }, 'a number typed into a form');
+  for (const bad of [-1, 1.5, 'abc', '', '1e6', '12 34', null, undefined, NaN, 'Infinity', 10 ** 13]) assert.equal(validate(daily, bad).ok, false, String(bad));
+  assert.equal(validate(daily, 999).error, 'out_of_range');
+  assert.equal(validate(daily, 10_000_000_001).error, 'out_of_range');
+  assert.equal(validate(daily, 0).error, 'confirm_zero', 'turning a limit off needs a yes');
+  assert.match(validate(daily, 0).message, /0 means unlimited/);
+  assert.deepEqual(validate(daily, 0, { confirmed: true }), { ok: true, value: 0 });
+  assert.equal(POLICIES.every((p) => p.min >= 1 && p.max > p.min && p.zero && p.label && p.description && p.applies && p.unit && p.group), true, 'every setting is described');
+  assert.equal(crossCheck({ dailyTokenQuota: 1000, monthlyTokenQuota: 500 }) !== null, true, 'a month smaller than a day makes no sense');
+  assert.equal(crossCheck({ dailyTokenQuota: 1000, monthlyTokenQuota: 0 }), null);
+  assert.equal(crossCheck({ dailyTokenQuota: 0, monthlyTokenQuota: 500 }), null);
+});
+
+test('policies: the environment value is the default, overrides are stored, applied in place, survive a new start, and reset removes them', () => {
+  const store = new UsageStore(':memory:');
+  const cfg = loadConfig(baseEnv({ DAILY_TOKEN_QUOTA: '100000', MONTHLY_TOKEN_QUOTA: '2000000' }));
+  const seen = [];
+  const p = createPolicies({ cfg, store, onChange: (c) => seen.push(c.rateLimitPerMinute) });
+  p.load();
+  const row = (key) => p.list().find((x) => x.key === key);
+  assert.deepEqual([row('dailyTokenQuota').value, row('dailyTokenQuota').default, row('dailyTokenQuota').source], [100000, 100000, 'default']);
+  assert.deepEqual(p.set('dailyTokenQuota', 250_000), { ok: true, from: 100000, to: 250000 });
+  assert.equal(cfg.dailyTokenQuota, 250_000, 'the running configuration changed in place');
+  assert.deepEqual([row('dailyTokenQuota').source, row('dailyTokenQuota').default], ['admin', 100000]);
+  assert.ok(row('dailyTokenQuota').updatedAt > 0);
+  // A new start of the proxy with the same database and the same environment: the override is still there.
+  const cfg2 = loadConfig(baseEnv({ DAILY_TOKEN_QUOTA: '100000', MONTHLY_TOKEN_QUOTA: '2000000' }));
+  createPolicies({ cfg: cfg2, store }).load();
+  assert.equal(cfg2.dailyTokenQuota, 250_000);
+  assert.deepEqual(p.reset('dailyTokenQuota'), { ok: true, from: 250000, to: 100000 });
+  assert.equal(cfg.dailyTokenQuota, 100000);
+  assert.equal(row('dailyTokenQuota').source, 'default');
+  assert.equal(store.policyOverrides().length, 0);
+  // Refusals change nothing.
+  for (const [key, value, error] of [['dailyTokenQuota', 5, 'out_of_range'], ['dailyTokenQuota', 'lots', 'not_a_number'], ['dailyTokenQuota', 0, 'confirm_zero'], ['monthlyTokenQuota', 90_000, 'conflict'], ['nope', 1, 'not_found']]) {
+    const r = p.set(key, value);
+    assert.deepEqual([r.ok, r.error], [false, error], `${key}=${value}`);
+  }
+  assert.equal(cfg.dailyTokenQuota, 100000);
+  assert.equal(store.policyOverrides().length, 0, 'nothing was stored');
+  assert.deepEqual(p.set('rateLimitPerMinute', 5), { ok: true, from: 60, to: 5 });
+  assert.equal(seen.at(-1), 5, 'a part that copied a value is told');
+  assert.equal(p.reset('nope').status, 404);
+});
+
+test('policies: a stored value that is not valid, or that conflicts, is ignored with a log line and the defaults apply', () => {
+  const store = new UsageStore(':memory:');
+  store.setPolicy('dailyTokenQuota', 5);
+  store.setPolicy('retiredSetting', 7);
+  const logs = [];
+  const cfg = loadConfig(baseEnv());
+  createPolicies({ cfg, store, log: (m) => logs.push(m) }).load();
+  assert.equal(cfg.dailyTokenQuota, 500_000, 'the default, not 5');
+  assert.equal(logs.length, 2);
+  assert.ok(logs.every((l) => /ignoring the stored value/.test(l)));
+  const store2 = new UsageStore(':memory:');
+  store2.setPolicy('dailyTokenQuota', 900_000);
+  store2.setPolicy('monthlyTokenQuota', 2_000);
+  const logs2 = [];
+  const cfg2 = loadConfig(baseEnv());
+  createPolicies({ cfg: cfg2, store: store2, log: (m) => logs2.push(m) }).load();
+  assert.deepEqual([cfg2.dailyTokenQuota, cfg2.monthlyTokenQuota], [500_000, 5_000_000]);
+  assert.match(logs2.at(-1), /conflict/);
+});
+
+test('policy routes: list, change, reset over the admin socket; the change takes effect on the next request; the secret is required', async () => {
+  const h = await harness({ env: { DAILY_TOKEN_QUOTA: '100000' } });
+  try {
+    const token = h.store.issueToken(1);
+    assert.equal((await h.adminCall('/admin/policy', 'GET', undefined, 'wrong')).status, 401);
+    const listed = await (await h.adminCall('/admin/policy')).json();
+    assert.equal(listed.settings.length, POLICIES.length);
+    assert.deepEqual(listed.settings.find((s) => s.key === 'dailyTokenQuota'), { ...POLICIES.find((p) => p.key === 'dailyTokenQuota'), default: 100000, value: 100000, source: 'default', updatedAt: null });
+    // Some usage, then a daily allowance below it: the very next request is refused, with no restart.
+    h.store.record(1, { input: 900, output: 600 });
+    assert.equal((await h.chat(token)).status, 200);
+    const set = await h.adminCall('/admin/policy/dailyTokenQuota', 'PUT', { value: 1000 });
+    assert.equal(set.status, 200);
+    const out = await set.json();
+    assert.deepEqual([out.from, out.to], [100000, 1000]);
+    assert.equal(out.settings.find((s) => s.key === 'dailyTokenQuota').source, 'admin');
+    assert.equal((await h.chat(token)).status, 429, 'refused under the new allowance');
+    assert.equal((await (await h.adminCall('/admin/usage/1')).json()).day.limit, 1000, 'the usage report shows the new limit');
+    assert.equal((await h.adminCall('/admin/policy/dailyTokenQuota', 'DELETE')).status, 200);
+    assert.equal((await h.chat(token)).status, 200, 'and fine again once reset');
+    // Rate limit and output cap are live too.
+    const token2 = h.store.issueToken(2); // a user with no requests yet this minute
+    await h.adminCall('/admin/policy/rateLimitPerMinute', 'PUT', { value: 1 });
+    assert.equal((await h.chat(token2)).status, 200);
+    assert.equal((await h.chat(token2)).status, 429, 'a second request in the minute is over the new rate limit');
+    await h.adminCall('/admin/policy/rateLimitPerMinute', 'DELETE');
+    assert.equal((await h.chat((h.store.issueToken(3)))).status, 200);
+    assert.equal((await h.chat(token2)).status, 200, 'and the default limit applies again');
+    await h.adminCall('/admin/policy/maxOutputTokens', 'PUT', { value: 300 });
+    await h.chat(token, { max_tokens: 5000 });
+    assert.equal(h.up.calls.at(-1).body.max_tokens, 300, 'the reply cap changed');
+    // Refusals: the status and a plain message, and nothing stored.
+    const zero = await h.adminCall('/admin/policy/dailyTokenQuota', 'PUT', { value: 0 });
+    assert.equal(zero.status, 400);
+    assert.equal((await zero.json()).error.code, 'confirm_zero');
+    assert.equal((await h.adminCall('/admin/policy/dailyTokenQuota', 'PUT', { value: 0, confirm: true })).status, 200, 'with the yes');
+    assert.equal((await h.adminCall('/admin/policy/dailyTokenQuota', 'PUT', { value: 'many' })).status, 400);
+    assert.equal((await h.adminCall('/admin/policy/nope', 'PUT', { value: 5 })).status, 404);
+    assert.equal((await h.adminCall('/admin/policy/not-a-key!', 'PUT', { value: 5 })).status, 404);
+    const logged = h.logs.filter((l) => l.includes('audit') && l.includes('policy.')).join('\n');
+    assert.match(logged, /"event":"policy.set","key":"dailyTokenQuota","from":100000,"to":1000/);
+    assert.match(logged, /"event":"policy.reset"/);
+    assert.ok(!/dshu_|sk-REAL/.test(logged));
   } finally {
     await h.close();
   }
