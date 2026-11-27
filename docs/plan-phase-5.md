@@ -16,7 +16,7 @@ What users see today (from `gateway/web/src/pages/*` and `gateway/src/*`):
 
 | Question | Decision | Consequences |
 | --- | --- | --- |
-| Who are the users? | **Developers** | Keep plugins and the terminal. The image needs real developer tooling. Explain limits and policy instead of hiding features. |
+| Who are the users? | **Developers** (chosen 2026-11-25). **Superseded on 2026-11-26: the first users are cybersecurity professionals**, see [plan-phase-6.md](plan-phase-6.md); developers remain a secondary audience | Keep plugins and the terminal. The image needs real tooling; that work moved to phase 6 (S6-1 and S6-2 replace P5-4 and P5-5, with a security toolset on top of the developer one). Explain limits and policy instead of hiding features. |
 | Main task | **Build software** | Priorities: toolbox and package caches, working with repositories, seeing what the agent builds. File upload and zip export are lower priority (developers have git). |
 | Agent keeps working with the tab closed | **Yes, with a cap** | Model traffic and running processes count as activity, up to a cap (default 2 hours of busy time after the last browser activity). Costs more compute per user; the cap is a setting. |
 | Email | **Mailgun** | Send through Mailgun's HTTP API (`POST https://api.mailgun.net/v3/<domain>/messages`, HTTP basic auth with user `api` and the API key; EU accounts use `api.eu.mailgun.net`), using Node's built-in `fetch`, so the gateway keeps its no-runtime-dependencies rule and needs no SMTP client. Behind a small provider interface (`MAIL_PROVIDER`), with a `log` provider for development and tests. Mailgun needs a **sending domain with DNS records** (SPF and DKIM, verified in Mailgun) for real delivery; a Mailgun sandbox domain only sends to pre-authorised recipients, so it is good for the first manual test and not for users. Plan limits and pricing change: check the current Mailgun terms before launch (not verified here). Settings: `MAILGUN_API_KEY`, `MAILGUN_DOMAIN`, `MAILGUN_REGION` (`us` or `eu`), `MAIL_FROM`. |
@@ -39,8 +39,8 @@ Each task is one topic branch and one pull request, with tests and documentation
 
 | Task | Item | What and where | Verify |
 | --- | --- | --- | --- |
-| **P5-4 Developer toolbox** | 22 | First check what the harness build already provides. Then add to `sandbox/Dockerfile`: git, Python 3 with pip and venv, build-essential, curl, jq, ripgrep, unzip, ca-certificates. Keep the root read-only and the image reproducible; record size and build time. | A Docker case that runs `git`, `python3`, a compile and a `pip install` inside the confined shell. |
-| **P5-5 Package caches that persist** | 23 | A per-user cache volume (npm, pip, cargo) with the cache variables set in the entrypoint. **Known pitfall:** the agent's shell can write only its session folder plus configured extra roots, so the cache directory must be added to `sandbox-policy`'s `additionalWritableRoots`; otherwise installs fail inside the confined shell. Add the volume to the runner's spec, the backup list and the disk accounting. | Docker case: install a package twice and see the second one hit the cache; cache survives a restart; backup and restore include it. |
+| **P5-4 Developer toolbox** (moved to phase 6 as S6-1, which adds the security packs; see [plan-phase-6.md](plan-phase-6.md)) | 22 | First check what the harness build already provides. Then add to `sandbox/Dockerfile`: git, Python 3 with pip and venv, build-essential, curl, jq, ripgrep, unzip, ca-certificates. Keep the root read-only and the image reproducible; record size and build time. | A Docker case that runs `git`, `python3`, a compile and a `pip install` inside the confined shell. |
+| **P5-5 Package caches that persist** (moved to phase 6 as S6-2) | 23 | A per-user cache volume (npm, pip, cargo) with the cache variables set in the entrypoint. **Known pitfall:** the agent's shell can write only its session folder plus configured extra roots, so the cache directory must be added to `sandbox-policy`'s `additionalWritableRoots`; otherwise installs fail inside the confined shell. Add the volume to the runner's spec, the backup list and the disk accounting. | Docker case: install a package twice and see the second one hit the cache; cache survives a restart; backup and restore include it. |
 
 ### Slice 3: first-run and access
 
@@ -180,7 +180,7 @@ Tests: `tests/gateway/signup.test.mjs` (11: `safeNext` matrix, invite states, li
 **What was found and left alone.** The sidebar label and version come from code (`brand.localBuild`, `DSH_CLIENT_VERSION`, which the harness build always sets), so a build-time environment variable cannot remove them; `DSH_CLIENT_TITLE` only affects the page title. The "deepseek HARNESS" wordmark in the top bar and the login page is the harness's brand and was kept (see its `BRAND_GUIDELINES.md` before changing it). "Preview" was removed as a badge only; the harness is still labelled preview upstream.
 
 **Known gaps.**
-- The welcome says Git push and download "are still being built"; update it when P5-4 (tools) and files-out land.
+- The welcome says Git push and download "are still being built"; update it when the toolbox (phase 6, S6-1) and files-out land.
 - English only. The curation edits are English text matches.
 - `curate.ts` depends on the harness's markup; there is no contract with the harness for it.
 - A fresh user sees the welcome before the workspace has finished loading; that is intended (they read while it starts).
