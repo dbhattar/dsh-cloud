@@ -1,0 +1,111 @@
+#!/bin/sh
+# dsh-git: let git read a private GitHub repository, without the token ever going through the chat.
+#
+#   dsh-git login [--repo OWNER/REPO] [--allow-classic]   ask for a token (typed hidden, in a terminal) and store it for github.com
+#   dsh-git logout                                         remove the stored token and git's setting for it
+#   dsh-git status                                         say whether a token is stored (the token is never shown)
+#   dsh-git login --stdin ...                              read the token from standard input instead (for scripts)
+#
+# Use a FINE-GRAINED token, limited to the one repository, with the "Contents: read-only" permission and a short expiry, and run
+# `dsh-git logout` when the work is done. Never paste a token into the chat: the chat goes to the model provider. The token is stored in
+# ~/.config/dsh/git-credentials (mode 600) and used by git only for that host. It is a file in your workspace, so the agent can read it, and
+# so can backups of the workspace volume: that is why the token must be read-only, single-repository and short-lived. There is no push access.
+# Testing against another server: --host HOST[:PORT] --protocol https|http (the token rules for github.com do not apply there).
+set -eu
+usage() { sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; }
+die() { echo "dsh-git: $*" >&2; exit "${2:-1}"; }
+
+CRED_DIR="${HOME:?HOME is not set}/.config/dsh"
+CRED_FILE="$CRED_DIR/git-credentials"
+
+CMD="${1:-}"
+case "$CMD" in
+  login|logout|status) shift ;;
+  -h|--help|"") usage; [ -n "$CMD" ] || exit 2; exit 0 ;;
+  *) echo "dsh-git: unknown command: $CMD (try --help)" >&2; exit 2 ;;
+esac
+
+HOST=github.com; PROTOCOL=https; REPO=""; STDIN=no; CLASSIC=no
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --host) [ $# -ge 2 ] || die "--host needs a value" 2; HOST="$2"; shift 2 ;;
+    --protocol) [ $# -ge 2 ] || die "--protocol needs a value" 2; PROTOCOL="$2"; shift 2 ;;
+    --repo) [ $# -ge 2 ] || die "--repo needs OWNER/REPO" 2; REPO="$2"; shift 2 ;;
+    --stdin) STDIN=yes; shift ;;
+    --allow-classic) CLASSIC=yes; shift ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "dsh-git: unknown option: $1 (try --help)" >&2; exit 2 ;;
+  esac
+done
+case "$PROTOCOL" in https|http) ;; *) die "--protocol must be https or http" 2 ;; esac
+case "$HOST" in *[!A-Za-z0-9.:-]*|"") die "--host must be a host name, optionally with :port" 2 ;; esac
+case "$REPO" in *[!A-Za-z0-9._/-]*) die "--repo must look like OWNER/REPO" 2 ;; esac
+URLKEY="$PROTOCOL://$HOST"
+
+# Which host a stored line is for: whatever follows the last "@", up to any "/", with git's own percent-encoding of ":" (git rewrites an entry
+# it has just used, so "host:8123" comes back as "host%3a8123") undone, compared without regard to case. Matching the whole host keeps
+# "github.com" from matching "github.com.example", and recognising git's rewrite keeps a used token from escaping `login` and `logout`.
+HOST_OF='n = split($0, p, "@"); h = p[n]; sub(/\/.*$/, "", h); gsub(/%3[aA]/, ":", h); h = tolower(h)'
+has_host() { [ -f "$CRED_FILE" ] && awk -v want="$HOST" "BEGIN { want = tolower(want) } { $HOST_OF; if (h == want) found = 1 } END { exit !found }" "$CRED_FILE"; }
+# Remove every stored line for this host (the file may hold other hosts).
+drop_host() {
+  [ -f "$CRED_FILE" ] || return 0
+  tmp="$(mktemp "$CRED_DIR/.tmp.XXXXXX")"
+  awk -v want="$HOST" "BEGIN { want = tolower(want) } { $HOST_OF; if (h != want) print }" "$CRED_FILE" > "$tmp" || true
+  if [ -s "$tmp" ]; then chmod 600 "$tmp"; mv "$tmp" "$CRED_FILE"; else rm -f "$tmp" "$CRED_FILE"; fi
+}
+
+case "$CMD" in
+  status)
+    if has_host; then
+      kind="a token"
+      case "$(sed -n "s|^$PROTOCOL://x-access-token:\\([A-Za-z0-9]*\\).*|\\1|p" "$CRED_FILE" | head -n 1)" in github) kind="a fine-grained token (github_pat_...)" ;; ghp|gho|ghu|ghs|ghr) kind="a CLASSIC token (broad access: replace it)" ;; esac
+      echo "stored for $URLKEY: $kind (file $CRED_FILE, mode $(stat -c %a "$CRED_FILE" 2>/dev/null || stat -f %Lp "$CRED_FILE")). The token is not shown."
+    else
+      echo "no token stored for $URLKEY"
+    fi
+    ;;
+  logout)
+    drop_host
+    git config --global --unset-all "credential.$URLKEY.helper" 2>/dev/null || true
+    echo "removed the stored token for $URLKEY. If it was a real token, also delete it on GitHub (Settings > Developer settings > Personal access tokens)."
+    ;;
+  login)
+    if [ "$STDIN" = yes ]; then
+      IFS= read -r token || true
+    else
+      [ -t 0 ] || die "no terminal to ask in. Run this in a terminal, not through the chat (or use --stdin from a script)." 2
+      printf 'GitHub token for %s (typing is hidden): ' "$HOST" >&2
+      stty -echo 2>/dev/null || true
+      trap 'stty echo 2>/dev/null || true' EXIT INT TERM
+      IFS= read -r token || true
+      stty echo 2>/dev/null || true
+      echo >&2
+    fi
+    # Only plain token characters: nothing that could turn the stored line into a different URL or a second line.
+    case "$token" in ""|*[!A-Za-z0-9_-]*) die "that is not a token (it is empty or has characters a token does not have)" ;; esac
+    [ "${#token}" -ge 20 ] && [ "${#token}" -le 255 ] || die "that is not a token (a GitHub token is 20 to 255 characters)"
+    if [ "$HOST" = github.com ] && [ "$CLASSIC" = no ]; then
+      case "$token" in
+        ghp_*|gho_*|ghu_*|ghs_*|ghr_*) die "that is a classic token, which carries broad access to your account. Create a fine-grained token limited to one repository with Contents: read-only (GitHub > Settings > Developer settings > Personal access tokens > Fine-grained tokens), or add --allow-classic if you accept the risk." ;;
+      esac
+    fi
+    umask 077
+    mkdir -p "$CRED_DIR"
+    chmod 700 "$CRED_DIR"
+    drop_host
+    printf '%s://x-access-token:%s@%s\n' "$PROTOCOL" "$token" "$HOST" >> "$CRED_FILE"
+    chmod 600 "$CRED_FILE"
+    unset token
+    git config --global "credential.$URLKEY.helper" "store --file $CRED_FILE"
+    echo "stored a token for $URLKEY (not shown). It is readable by the agent and by backups of this workspace: keep it read-only, limited to one repository and short-lived, and run 'dsh-git logout' when you are done." >&2
+    if [ -n "$REPO" ]; then
+      if GIT_TERMINAL_PROMPT=0 git ls-remote --exit-code "$URLKEY/$REPO" HEAD >/dev/null 2>&1; then
+        echo "checked: $URLKEY/$REPO is readable with that token." >&2
+      else
+        echo "could not read $URLKEY/$REPO with that token: it may be for another repository, lack Contents: read access, or have expired. The token is still stored; 'dsh-git logout' removes it." >&2
+        exit 3
+      fi
+    fi
+    ;;
+esac

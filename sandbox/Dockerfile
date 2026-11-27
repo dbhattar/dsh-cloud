@@ -35,6 +35,9 @@ RUN /tmp/tools/install-tools.sh /tmp/tools/tools.lock && rm -rf /tmp/tools
 COPY pytools.txt /tmp/pytools.txt
 RUN python3 -m venv /opt/pytools && /opt/pytools/bin/pip install --no-cache-dir -r /tmp/pytools.txt && rm /tmp/pytools.txt
 
+# dsh-git: gives git a read-only credential for one host (GitHub), typed hidden in a terminal and never through the chat (docs/github-access.md).
+COPY --chmod=0755 bin/dsh-git /usr/local/bin/dsh-git
+
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN useradd --home-dir /workspace --no-create-home --shell /bin/bash dsh \
  && mkdir -p /data/dsh /workspace \

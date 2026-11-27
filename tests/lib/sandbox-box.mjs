@@ -53,6 +53,11 @@ export function agentIn(box, snippet, { timeout = 90 } = {}) {
   }
 }
 
+/** Write `content` to `path` inside `box` (as the sandbox user), through stdin so it is not subject to any quoting. */
+export function putFile(box, path, content) {
+  sh('docker', ['exec', '-i', box, 'sh', '-c', `cat > ${path}`], { input: content, stdio: ['pipe', 'pipe', 'pipe'] });
+}
+
 export function cleanup({ boxes = [], egress, volumes = [], net }) {
   for (const b of boxes) tryDocker('rm', '-f', b);
   if (egress) tryDocker('rm', '-f', egress);
