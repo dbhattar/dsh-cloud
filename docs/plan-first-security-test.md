@@ -1,6 +1,6 @@
 # Path to a first security test of the owner's two web apps, from the local setup
 
-Status: **plan approved (2026-11-27); not started.** This is the shortest route through [plan-phase-6.md](plan-phase-6.md) to a first real use, written before any of it was built. Facts it relies on are in [research-security-tooling.md](research-security-tooling.md); anything not checked is marked **to verify**. Working rules: [../AGENTS.md](../AGENTS.md).
+Status: **plan approved (2026-11-27); step 1 (the spike) done, results below and in [research-security-tooling.md](research-security-tooling.md); step 2 next.** This is the shortest route through [plan-phase-6.md](plan-phase-6.md) to a first real use, written before any of it was built. Facts it relies on are in [research-security-tooling.md](research-security-tooling.md); anything not checked is marked **to verify**. Working rules: [../AGENTS.md](../AGENTS.md).
 
 
 ## Context
@@ -16,14 +16,14 @@ So reachability needs no new network path (the egress proxy already reaches publ
 
 - **Reach:** sandbox to any public host on ports 80 and 443 through the egress proxy; private addresses, other ports and non-HTTP protocols refused (measured, [research-security-tooling.md](research-security-tooling.md)).
 - **No limits on that path:** no host allowlist, no per-user or per-destination rate limit, no stored per-user record (`egress-proxy/src/server.js`, `filter.js`, `config.js`).
-- **The agent's confined shell and the network:** the harness's file-effect policy says network is "outside its vocabulary", so it should not block it (read in `packages/sandbox/sandbox-policy/README.md`). **Not verified live:** that the confined shell sees the proxy variables and can reach out. This is step 1.
-- **Tools:** the image is `node:24-slim` plus bubblewrap. Whether `curl`, `git` or `python3` are present is **to verify** in step 1; the toolbox tasks were deferred, so assume not.
+- **The agent's confined shell and the network:** **verified in the step 1 spike** with the real agent: the shell has the proxy variables, reaches public hosts on 443 and 80 through the proxy, is refused on port 8080 and for private and metadata addresses, and has no route when it ignores the proxy. The model token is not visible to it.
+- **Tools:** **verified: the image has only `node` and `npm`.** No `curl`, `git`, `python3`, `jq` or compiler, so step 2 needs the whole list.
 - **Model:** the free router; quality on security prompts and its data handling are unverified (fine for the owner's own staging apps, weak for client work).
 
 ## The path, in order (each is one branch and one pull request, per AGENTS.md)
 
-### 1. Spike: can the agent's shell reach staging? (S, no feature code)
-Open a workspace in the local stack, have the agent (or the terminal) run one `curl`/`node` request to a public HTTPS URL through the confined shell; record what is installed (`curl`, `git`, `python3`, `jq`) and whether the proxy variables are present. Add the result to `docs/research-security-tooling.md`. Decides how much of step 2 is needed.
+### 1. Spike: can the agent's shell reach staging? (S, no feature code) — done 2026-11-27
+The real agent ran a fixed probe through its confined shell in a throwaway account of the local stack. Result: reachability works as designed, nothing but Node is installed, and the model token is hidden from the agent's shell; details in [research-security-tooling.md](research-security-tooling.md). The probe is now `scripts/probe-agent-shell.sh` (with a test) so it can be rerun after the toolbox and the egress limits land.
 
 ### 2. Toolbox for web testing and repo work (M; subset of phase 6 S6-1 and S6-6, replaces P5-4/P5-5 for now)
 - `sandbox/Dockerfile`: apt packages measured to exist on Debian 12 (aarch64): `git`, `curl`, `ca-certificates`, `python3` with `pip` and `venv`, `jq`, `ripgrep`, `unzip`, `sqlmap`, `ffuf`, `gobuster`, `sslscan`, `testssl.sh`, `whatweb`.
