@@ -109,6 +109,16 @@ services:
       dsh-cloud.role: egress-proxy # sandbox-runner attaches it to every user network
     environment:
       ALLOWED_PORTS: ${EGRESS_ALLOWED_PORTS:-80,443}
+      # Scope: empty = any public host. Set to a comma-separated list (example.com, *.example.com, an IPv4 address) and only those hosts
+      # plus the base list (what git, pip, npm, Go and the vulnerability scanners need) are reachable. scripts/egress-scope.sh edits it.
+      EGRESS_ALLOW_HOSTS: ${EGRESS_ALLOW_HOSTS:-}
+      EGRESS_BASE_HOSTS: ${EGRESS_BASE_HOSTS:-} # empty = the built-in base list; "none" = no base list
+      # Limits per sandbox and per destination host (empty = the defaults in egress-proxy/README.md; 0 = off).
+      RATE_PER_SOURCE: ${EGRESS_RATE_PER_SOURCE:-}
+      RATE_PER_DESTINATION: ${EGRESS_RATE_PER_DESTINATION:-}
+      MAX_CONNECTIONS_PER_SOURCE: ${EGRESS_MAX_CONNECTIONS_PER_SOURCE:-}
+      MAX_CONNECTIONS_PER_DESTINATION: ${EGRESS_MAX_CONNECTIONS_PER_DESTINATION:-}
+      LIMIT_WAIT_SECONDS: ${EGRESS_LIMIT_WAIT_SECONDS:-}
     expose:
       - "3128"
   proxy:

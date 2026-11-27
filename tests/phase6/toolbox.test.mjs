@@ -8,54 +8,24 @@
 import test, { before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { ROOT, sh, sleep, waitFor } from '../lib/helpers.mjs';
+import { ROOT, waitFor } from '../lib/helpers.mjs';
+import { CONFINED, IMAGE, RUNTIME, agentIn, cleanup, docker, requireImage, startBox, startEgress, tryDocker } from '../lib/sandbox-box.mjs';
 
-const RUNTIME = process.env.SANDBOX_RUNTIME ?? 'runc';
-const CONFINED = RUNTIME === 'runsc';
-const IMAGE = process.env.SANDBOX_IMAGE ?? 'dsh-sandbox:latest';
 const NET = 'dsh-toolbox-net';
 const EGRESS = 'dsh-toolbox-egress';
 const BOX = 'dsh-toolbox-sbx';
 const WS = 'dsh-toolbox-ws';
 
-const docker = (...a) => sh('docker', a, { maxBuffer: 64 * 1024 * 1024 }).trim();
-const tryDocker = (...a) => { try { return docker(...a); } catch { return ''; } };
 const lock = readFileSync(`${ROOT}/sandbox/tools.lock`, 'utf8').split('\n').filter((l) => l.trim() && !l.startsWith('#')).map((l) => l.split(/\s+/));
 const lockedVersion = (tool) => lock.find((l) => l[0] === tool)[1];
-
-/** The harness's own confinement arguments (docs/research-harness-policy.md): the root read-only, /workspace and /tmp writable, no network namespace. */
-const BWRAP = 'bwrap --ro-bind / / --dev /dev --unshare-pid --proc /proc --die-with-parent --tmpfs /tmp --bind /workspace /workspace';
-/**
- * Run a shell snippet as the agent's shell would: confined when possible. The snippet is written to a file in the workspace first, so
- * it reaches the shell exactly as written (no quoting layers). Returns { ok, out }.
- */
-function agent(snippet, { timeout = 90 } = {}) {
-  try {
-    sh('docker', ['exec', '-i', BOX, 'sh', '-c', 'cat > /workspace/.snippet.sh'], { input: snippet, stdio: ['pipe', 'pipe', 'pipe'] });
-    const run = `timeout ${timeout} sh /workspace/.snippet.sh`;
-    return { ok: true, out: docker('exec', '-w', '/workspace', BOX, 'sh', '-c', CONFINED ? `${BWRAP} ${run}` : run) };
-  } catch (e) {
-    return { ok: false, out: `${e.stdout ?? ''}${e.stderr ?? ''}`.trim() };
-  }
-}
+const agent = (snippet, opts) => agentIn(BOX, snippet, opts);
 
 let internet = false;
 
 before(async () => {
-  assert.ok(tryDocker('image', 'inspect', '-f', '{{.Id}}', IMAGE), `the image ${IMAGE} is not built: run scripts/restart.sh, or docker build -t dsh-sandbox:latest sandbox`);
-  docker('build', '-q', '-t', 'dsh-toolbox-egress-img', `${ROOT}/egress-proxy`);
-  docker('network', 'create', '--internal', NET);
-  docker('run', '-d', '--name', EGRESS, '--network', 'bridge', 'dsh-toolbox-egress-img');
-  docker('network', 'connect', NET, EGRESS);
-  const ip = docker('inspect', '-f', `{{(index .NetworkSettings.Networks "${NET}").IPAddress}}`, EGRESS);
-  const proxy = `http://egress-proxy:3128`;
-  const env = ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy'].flatMap((k) => ['-e', `${k}=${proxy}`]);
-  docker('run', '-d', '--name', BOX, ...(RUNTIME ? ['--runtime', RUNTIME] : []), '--network', NET, '--add-host', `egress-proxy:${ip}`,
-    '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges', '--read-only', '--tmpfs', '/tmp:rw,exec,nosuid,nodev,size=512m',
-    '--memory', '2g', '--pids-limit', '512', '-v', `${WS}:/workspace`,
-    ...env, '-e', 'NO_PROXY=localhost,127.0.0.1', '-e', 'no_proxy=localhost,127.0.0.1', '-e', 'NODE_USE_ENV_PROXY=1',
-    '--entrypoint', 'sleep', IMAGE, '3600');
-  await waitFor(() => tryDocker('inspect', '-f', '{{.State.Running}}', BOX) === 'true', { timeoutMs: 30000, what: 'sandbox container' });
+  requireImage();
+  const egress = startEgress({ net: NET, name: EGRESS });
+  await startBox({ net: NET, name: BOX, egressIp: egress.ip, volume: WS });
   // A local web server for the offline checks, started outside the confinement (its own pid namespace would end it).
   docker('exec', BOX, 'sh', '-c', 'mkdir -p /workspace/www/admin && echo secret-panel > /workspace/www/admin/index.html && echo hello > /workspace/www/index.html');
   docker('exec', '-d', BOX, 'python3', '-m', 'http.server', '8099', '--bind', '127.0.0.1', '--directory', '/workspace/www');
@@ -65,12 +35,7 @@ before(async () => {
   if (!CONFINED) console.log(`note: SANDBOX_RUNTIME=${RUNTIME}: the harness's bubblewrap confinement cannot work here, so the checks run without it`);
 });
 
-after(() => {
-  tryDocker('rm', '-f', BOX);
-  tryDocker('rm', '-f', EGRESS);
-  tryDocker('volume', 'rm', WS);
-  tryDocker('network', 'rm', NET);
-});
+after(() => cleanup({ boxes: [BOX], egress: EGRESS, volumes: [WS], net: NET }));
 
 test('the tools are there, run as the sandbox user, and the pinned ones are the versions in sandbox/tools.lock', () => {
   const who = agent('id -u && id -un');

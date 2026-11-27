@@ -86,6 +86,17 @@ Step 2 of [plan-first-security-test.md](plan-first-security-test.md). Built on a
 
 **Not verified:** x86_64 (the lock covers amd64 and its hashes were checked against the projects' own checksums, but nothing amd64 was built or run); the interactive tools in the harness UI; nuclei's own template download (`nuclei -update-templates` goes to GitHub through the proxy and was not run, to avoid downloading a large template set in a test); `sqlmap` against a vulnerable target (version only).
 
+## Egress limits and scope result (2026-11-27)
+
+Step 3 of [plan-first-security-test.md](plan-first-security-test.md); details and settings in [../egress-proxy/README.md](../egress-proxy/README.md).
+
+- **Built:** an optional operator scope list (`EGRESS_ALLOW_HOSTS`, plus a base list), per-sandbox and per-destination rate and concurrency limits that wait before they refuse, and `scripts/egress-scope.sh` to change the list on a running stack.
+- **Measured (under gVisor, real tools, a throwaway proxy with the scope `example.com` and low limits):** `curl` and `httpx` to an unlisted host are refused (`CONNECT tunnel failed, response 403`; plain HTTP gets a 403 with `X-Egress-Reason`), and the log says `not in scope`; `www.example.com` is refused when only `example.com` is listed; `git clone`, `pip install`, `osv-scanner` and `pip-audit` all worked with the default base list and the proxy let through **only** `github.com`, `pypi.org`, `files.pythonhosted.org`, `api.osv.dev` and the listed host; 40 simultaneous connections from one sandbox gave 24 served and 16 refused with 429 (rate 5 a second, 4 open, a 2 s cap) while its neighbour's three requests took 0.5 s.
+- **Live on the local stack:** `scripts/egress-scope.sh --set example.com` recreated the egress proxy, the runner re-attached it to the user network within 20 s, `example.com` and `github.com` answered 200 and `www.wikipedia.org` was refused with the reason; `--clear` returned to open mode. A temporary copy of the env file was used, so the real `.env` was not touched.
+- **A bug in the existing proxy, found on the way (the finding that matters most; full write-up in [finding-egress-proxy-crash.md](finding-egress-proxy-crash.md)):** a refused `CONNECT` followed by a client reset emitted an unhandled socket error and **the whole egress proxy exited**. Any sandbox could have done this to every user. It is fixed (an error listener from the first moment; no connection is dialled for a client that has left; slots are returned) and has regression tests that fail without the fix. The Phase 4 abuse suites never reset a connection after a refusal. A probe of the plain-HTTP path (resets while the upstream is slow, mid-body, and after a scope refusal) showed no crash.
+- **Limits of the limits:** an HTTPS tunnel hides the requests inside it, so these limits bound tunnel churn and parallelism, not requests per second on a reused connection. The tools' own rate options and the methodology skills are the first line of control (step 5).
+- **Not exercised:** the base-list hosts for npm, Go modules, NVD, CISA, EPSS, osv-scanner's offline database and nuclei's template download (they are there because the tools use them, not because a test reached them); a per-user scope; x86_64.
+
 ## Verified from the source: the network path out of a sandbox
 
 Read in `egress-proxy/README.md` and `egress-proxy/src/*.js`, and `runner/src/spec.js`:

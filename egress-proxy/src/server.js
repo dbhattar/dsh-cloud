@@ -1,6 +1,7 @@
 import http from 'node:http';
 import net from 'node:net';
 import { resolvePublic } from './filter.js';
+import { Limits } from './limits.js';
 
 const HOP_BY_HOP = ['connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization', 'proxy-connection', 'te', 'trailer', 'transfer-encoding', 'upgrade'];
 
@@ -12,6 +13,9 @@ const HOP_BY_HOP = ['connection', 'keep-alive', 'proxy-authenticate', 'proxy-aut
  */
 export function createEgressProxy({ cfg, log = console.log, lookup, blocked }) {
   const opts = { lookup, blocked };
+  const limits = new Limits(cfg.limits ?? {});
+  const scope = cfg.scope ?? { check: () => ({ ok: true }) };
+  const sourceOf = (req) => String(req.socket.remoteAddress ?? '?').replace(/^::ffff:/, '');
   let active = 0;
   const audit = (req, target, decision, reason = '') =>
     log(`egress ${decision} src=${req.socket.remoteAddress ?? '?'} ${req.method} ${target}${reason ? ` (${reason})` : ''}`);
@@ -50,10 +54,22 @@ export function createEgressProxy({ cfg, log = console.log, lookup, blocked }) {
       res.writeHead(503).end('busy');
       return;
     }
+    const inScope = scope.check(url.hostname);
+    if (!inScope.ok) {
+      audit(req, target, 'deny', inScope.reason);
+      res.writeHead(403, { 'x-egress-reason': inScope.reason }).end(inScope.reason);
+      return;
+    }
     const v = await vet(url.hostname, port);
     if (!v.address) {
       audit(req, target, 'deny', v.reason);
       res.writeHead(v.status).end(v.reason);
+      return;
+    }
+    const adm = await limits.admit(sourceOf(req), url.hostname);
+    if (!adm.ok) {
+      audit(req, target, 'deny', adm.reason);
+      res.writeHead(429, { 'retry-after': String(adm.retryAfter), 'x-egress-reason': adm.reason }).end(adm.reason);
       return;
     }
     audit(req, target, 'allow');
@@ -71,6 +87,7 @@ export function createEgressProxy({ cfg, log = console.log, lookup, blocked }) {
     );
     const done = () => {
       active--;
+      adm.release();
     };
     res.on('close', done);
     out.on('timeout', () => out.destroy(new Error('upstream timed out')));
@@ -83,7 +100,14 @@ export function createEgressProxy({ cfg, log = console.log, lookup, blocked }) {
 
   server.on('connect', async (req, client, head) => {
     const m = /^(\[[^\]]+\]|[^:]+):(\d+)$/.exec(req.url ?? '');
-    const refuse = (status, text) => client.end(`HTTP/1.1 ${status} ${text}\r\nConnection: close\r\n\r\n`);
+    // The reason travels in a header (and a short body) so the tool's error says why, not just "403".
+    const refuse = (status, text, reason = '', retryAfter = 0) => {
+      const body = reason ? `${reason}\n` : '';
+      client.end(`HTTP/1.1 ${status} ${text}\r\n${reason ? `X-Egress-Reason: ${reason}\r\n` : ''}${retryAfter ? `Retry-After: ${retryAfter}\r\n` : ''}Content-Type: text/plain\r\nContent-Length: ${Buffer.byteLength(body)}\r\nConnection: close\r\n\r\n${body}`);
+    };
+    // A client that resets its connection (straight after a refusal, say) makes the socket emit an error; with no listener that is an
+    // uncaught exception and the whole proxy, shared by every sandbox, would exit. Listen from the first moment, before any await.
+    client.on('error', () => client.destroy());
     if (!m) return refuse(400, 'Bad Request');
     const host = m[1];
     const port = Number(m[2]);
@@ -91,18 +115,39 @@ export function createEgressProxy({ cfg, log = console.log, lookup, blocked }) {
       audit(req, req.url, 'deny', 'too many connections');
       return refuse(503, 'Busy');
     }
-    active++; // counted while vetting too, so a flood of slow lookups is capped
+    active++; // counted while vetting and waiting too, so a flood of slow lookups or queued requests is capped
+    const inScope = scope.check(host);
+    if (!inScope.ok) {
+      active--;
+      audit(req, req.url, 'deny', inScope.reason);
+      return refuse(403, 'Forbidden', inScope.reason);
+    }
     const v = await vet(host, port);
     if (!v.address) {
       active--;
       audit(req, req.url, 'deny', v.reason);
-      return refuse(v.status, v.status === 403 ? 'Forbidden' : 'Bad Gateway');
+      return refuse(v.status, v.status === 403 ? 'Forbidden' : 'Bad Gateway', v.reason);
+    }
+    const adm = await limits.admit(sourceOf(req), host);
+    if (!adm.ok) {
+      active--;
+      audit(req, req.url, 'deny', adm.reason);
+      return refuse(429, 'Too Many Requests', adm.reason, adm.retryAfter);
+    }
+    if (client.destroyed) {
+      // The client left while it was vetted or queued: do not dial for nobody, and give its slot back.
+      active--;
+      adm.release();
+      return;
     }
     audit(req, req.url, 'allow');
     const upstream = net.connect({ host: v.address, port, timeout: cfg.connectTimeoutMs });
     let released = false;
     const release = () => {
-      if (!released) active--;
+      if (!released) {
+        active--;
+        adm.release();
+      }
       released = true;
     };
     const close = () => {

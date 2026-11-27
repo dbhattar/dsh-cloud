@@ -66,6 +66,7 @@ What the first runs found (all fixed):
 - **A real bug**: `scripts/audit.sh --json` as the first flag was ignored, because the CLI took the first flag as an action. Found by the limits suite; now covered by a unit test.
 - **Stale test** from C3: the per-user network membership list lacked the egress proxy.
 - **Tests that assumed runc**: under gVisor `spawn` throws `ENOMEM` at the process limit instead of failing asynchronously.
+- **Found later (2026-11-27), not by these suites:** a refused `CONNECT` followed by a client reset made the CONNECT socket emit an error with no listener, which is an uncaught exception, so **the egress proxy, shared by every sandbox, exited**. Any sandbox could have done it on purpose. Fixed in the egress-proxy, with regression tests (`tests/egress-proxy/scope-limits.test.mjs`). Full write-up, including the impact and the follow-ups (no service has a restart policy): [finding-egress-proxy-crash.md](finding-egress-proxy-crash.md). The abuse suite did not reset a connection after a refusal.
 
 What abuse does, observed:
 - **Fork bomb**: the process limit holds (about 250 of 700 spawns succeed, the rest fail), the neighbour answers `docker exec` within seconds. The harness in the abused sandbox sometimes exits.

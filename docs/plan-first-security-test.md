@@ -1,6 +1,6 @@
 # Path to a first security test of the owner's two web apps, from the local setup
 
-Status: **plan approved (2026-11-27); steps 1 (the spike) and 2 (the toolbox) done, results in [research-security-tooling.md](research-security-tooling.md); step 3 next.** This is the shortest route through [plan-phase-6.md](plan-phase-6.md) to a first real use, written before any of it was built. Facts it relies on are in [research-security-tooling.md](research-security-tooling.md); anything not checked is marked **to verify**. Working rules: [../AGENTS.md](../AGENTS.md).
+Status: **plan approved (2026-11-27); steps 1 (the spike), 2 (the toolbox) and 3 (the safety limits) done, results in [research-security-tooling.md](research-security-tooling.md); step 4 (GitHub) next.** This is the shortest route through [plan-phase-6.md](plan-phase-6.md) to a first real use, written before any of it was built. Facts it relies on are in [research-security-tooling.md](research-security-tooling.md); anything not checked is marked **to verify**. Working rules: [../AGENTS.md](../AGENTS.md).
 
 
 ## Context
@@ -34,7 +34,9 @@ The real agent ran a fixed probe through its confined shell in a throwaway accou
 - Record image size and build time (expected: about +0.7 GB, about 30 s per cold layer).
 - **Tests:** new `tests/phase6/toolbox.test.mjs` (Docker, gVisor): one command from each tool runs as the sandbox user inside the confined shell; the pin script fails on a wrong checksum; a unit test for the pin file format.
 
-### 3. Safety limits before any tool is aimed at a live site (M; phase 6 S6-11, plus a small operator scope list)
+### 3. Safety limits before any tool is aimed at a live site (M; phase 6 S6-11, plus a small operator scope list) — done 2026-11-27
+*Built as described below, plus `scripts/egress-scope.sh` to change the list, and a fix for a crash in the existing proxy found on the way ([finding-egress-proxy-crash.md](finding-egress-proxy-crash.md)). To aim the tools at the staging apps: `scripts/egress-scope.sh --set <staging-host-1>,<staging-host-2>`. Results and the limits of the limits are in [research-security-tooling.md](research-security-tooling.md) and [../egress-proxy/README.md](../egress-proxy/README.md).*
+
 - **Rate and connection limits** per user network and per destination in `egress-proxy/src/server.js` (source address already identifies the user network): defaults conservative for staging, configurable by env now and by the Policies page later (P5-15 pattern in `llm-proxy/src/policy.js` / `gateway/src/policy.js`).
 - **Operator scope list (recommended):** an env setting `EGRESS_ALLOW_HOSTS` (exact and `*.domain` suffix entries) plus a small default base list the work needs (GitHub hosts, package registries, the template and database hosts nuclei and trivy use, knowledge sources). When set, the proxy refuses every other host with the reason "not in scope". With the two staging domains listed, a mistaken command or a crawler following a link **physically cannot** touch a third-party site. Global for now, not per user; per-user scope with ownership verification stays in phase 6 (S6-14 to S6-16).
 - Compose and `.env.example` pass the new settings; `egress-proxy/README.md` updated.
