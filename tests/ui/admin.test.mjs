@@ -24,11 +24,13 @@ const PW = 'a-long-password-1';
 const iso = (n) => new Date(Date.now() - n * 86_400_000).toISOString().slice(0, 10);
 
 /** A stack with seeded numbers; `runnerDown` makes the runner fail so its sections show as unavailable. */
-async function start({ runnerDown = false } = {}) {
+async function start({ runnerDown = false, proxyDown = false } = {}) {
   const port = await new Promise((r) => { const sv = net.createServer().listen(0, '127.0.0.1', () => { const p = sv.address().port; sv.close(() => r(p)); }); });
   const base = `http://127.0.0.1:${port}`;
   const store = new Store(':memory:');
   const cfg = loadConfig({ PUBLIC_URL: `${base}/`, RUNNER_URL: 'http://r:1', RUNNER_SECRET: 'runner-secret-0123456789' });
+  const quota = { value: 500_000 };
+  const proxyQuota = () => ({ key: 'dailyTokenQuota', group: 'Model allowances', label: 'Daily tokens per user', description: 'Input plus output tokens one user may use per UTC day.', unit: 'tokens', min: 1000, max: 10 ** 10, zero: 'unlimited', applies: 'Right away, for the next request', default: 500_000, value: quota.value, source: quota.value === 500_000 ? 'default' : 'admin', updatedAt: null });
   const boxes = new Map([[1, true], [2, true]]);
   const calls = [];
   const runner = {
@@ -44,6 +46,13 @@ async function start({ runnerDown = false } = {}) {
     activity: async () => ({ users: [] }),
     usage: async (id) => ({ userId: id, day: { used: id * 100, limit: 2500, resetsAt: '2026-11-27T00:00:00.000Z' }, month: { used: id * 1000, limit: 50000, resetsAt: '2026-12-01T00:00:00.000Z' }, exhausted: false, blockedBy: null, global: null }),
     revoke: async (id) => { calls.push(['revoke', id]); },
+    // A small stand-in for the proxy's policy routes: one setting, with its own checks and messages.
+    policy: async () => { if (proxyDown) throw new Error('socket'); return { settings: [proxyQuota()] }; },
+    setPolicy: async (key, value) => {
+      if (value < 1000) throw Object.assign(new Error('400'), { status: 400, detail: { code: 'out_of_range', message: 'Use 0 (unlimited) or a value from 1000 to 10000000000.' } });
+      const from = quota.value; quota.value = value; return { key, from, to: value };
+    },
+    resetPolicy: async (key) => { const from = quota.value; quota.value = 500_000; return { key, from, to: 500_000 }; },
   };
   const manager = new SandboxManager({ runner, cfg, log: () => {}, llm });
   const server = createGateway({ cfg, store, manager, log: () => {} });
@@ -65,7 +74,7 @@ async function start({ runnerDown = false } = {}) {
     await page.getByRole('button', { name: 'Got it' }).click({ timeout: 15000 }); // the welcome, shown once to a new user
     return page;
   };
-  return { base, store, calls, signIn, close: () => { server.closeAllConnections(); server.close(); } };
+  return { base, store, calls, cfg, signIn, close: () => { server.closeAllConnections(); server.close(); } };
 }
 
 test('an admin sees the Admin link, opens the panel, sees what admins did, and goes back', async (t) => {
@@ -373,6 +382,98 @@ test('audit: filter by event and by time, page with Older rows, and download the
     assert.equal(lines.length, 1 + 21, 'the 20 login.ok rows of the 60 seeded, plus the admin\'s own sign-in');
     assert.ok(lines.slice(1).every((l) => l.includes(',login.ok,')));
     assert.equal(g.store.queryAudit({ event: 'admin.audit_export' }).length, 1);
+    await page.context().close();
+  } finally { g.close(); }
+});
+
+test('policies: change a value and see it applied, a bad value explained, a limit turned off only with a yes, sign-up opened only with a yes, a proxy setting, and reset', async (t) => {
+  if (!browser) return t.skip(why);
+  const g = await start();
+  try {
+    const page = await g.signIn('boss@example.com');
+    await page.goto(`${g.base}/gw/admin/policies`);
+    await page.getByRole('heading', { name: 'Policies', level: 1 }).waitFor();
+    const idle = page.locator('li', { has: page.getByLabel('Idle time before a workspace is paused') });
+    await idle.waitFor();
+    assert.match(await idle.innerText(), /default/);
+    assert.match(await idle.innerText(), /Now 1,800 s \(30 minutes\)\. Default 1,800 s \(30 minutes\); allowed 60 to 604,800/);
+    assert.equal(await idle.getByRole('button', { name: 'Save' }).isDisabled(), true, 'nothing to save yet');
+    assert.equal(await idle.getByRole('button', { name: /Reset/ }).count(), 0, 'nothing to reset yet');
+    // Change it.
+    await idle.getByLabel('Idle time before a workspace is paused').fill('600');
+    assert.match(await idle.innerText(), /That is 600 s \(10 minutes\)/);
+    await idle.getByRole('button', { name: 'Save' }).click();
+    await idle.getByText('Saved.').waitFor();
+    assert.equal(g.cfg.idleSeconds, 600, 'applied to the running gateway');
+    assert.match(await idle.innerText(), /changed here/);
+    assert.match(await idle.innerText(), /Now 600 s \(10 minutes\)\. Default 1,800 s/);
+    assert.equal(g.store.queryAudit({ event: 'admin.policy_set' }).length, 1);
+    // A bad value: the server's explanation, nothing changes.
+    await idle.getByLabel('Idle time before a workspace is paused').fill('5');
+    await idle.getByRole('button', { name: 'Save' }).click();
+    await idle.getByRole('alert').waitFor();
+    assert.match(await idle.getByRole('alert').innerText(), /from 60 to 604800/);
+    assert.equal(g.cfg.idleSeconds, 600);
+    // Reset needs a second click.
+    await idle.getByRole('button', { name: 'Reset to default' }).click();
+    assert.equal(g.cfg.idleSeconds, 600, 'one click only arms it');
+    await idle.getByRole('button', { name: 'Click again to reset' }).click();
+    await idle.getByText('Back to the default.').waitFor();
+    assert.equal(g.cfg.idleSeconds, 1800);
+    // Turning a limit off needs the yes.
+    const run = page.locator('li', { has: page.getByLabel('Longest continuous run') });
+    await run.getByLabel('Longest continuous run').fill('3600');
+    await run.getByRole('button', { name: 'Save' }).click();
+    await run.getByText('Saved.').waitFor();
+    await run.getByLabel('Longest continuous run').fill('0');
+    assert.equal(await run.getByRole('button', { name: 'Save' }).isDisabled(), true, 'a 0 cannot be saved without the yes');
+    await run.getByLabel('Turn this limit off: 0 means no limit.').check();
+    await run.getByRole('button', { name: 'Save' }).click();
+    await run.getByText('Saved.').waitFor();
+    assert.equal(g.cfg.maxRunSeconds, 0);
+    // Opening sign-up needs the yes; closing it does not.
+    const signup = page.locator('li', { has: page.getByLabel('Anyone may sign up') });
+    await signup.getByLabel('Anyone may sign up').selectOption('on');
+    assert.equal(await signup.getByRole('button', { name: 'Save' }).isDisabled(), true);
+    await signup.getByLabel(/Anyone who can reach this address/).check();
+    await signup.getByRole('button', { name: 'Save' }).click();
+    await signup.getByText('Saved.').waitFor();
+    assert.equal(g.cfg.allowSignup, true);
+    await signup.getByLabel('Anyone may sign up').selectOption('off');
+    await signup.getByRole('button', { name: 'Save' }).click();
+    await signup.getByText('Saved.').waitFor();
+    assert.equal(g.cfg.allowSignup, false);
+    // A model-proxy setting, through the proxy's own checks.
+    const quota = page.locator('li', { has: page.getByLabel('Daily tokens per user') });
+    await quota.getByLabel('Daily tokens per user').fill('250000');
+    await quota.getByRole('button', { name: 'Save' }).click();
+    await quota.getByText('Saved.').waitFor();
+    assert.match(await quota.innerText(), /Now 250,000 \(250K\)/);
+    await quota.getByLabel('Daily tokens per user').fill('5');
+    await quota.getByRole('button', { name: 'Save' }).click();
+    assert.match(await quota.getByRole('alert').innerText(), /from 1000 to/);
+    // What changed is listed.
+    const recent = await page.locator('main').innerText();
+    assert.match(recent, /Recent changes[\s\S]*Daily tokens per user: 500000 → 250000/);
+    assert.match(recent, /Anyone may sign up: true → false/, 'labels, not setting names');
+    await page.screenshot({ path: process.env.ADMIN_POLICIES_SHOT || '/tmp/admin-policies.png', fullPage: true });
+    await page.context().close();
+  } finally { g.close(); }
+});
+
+test('policies: when the model proxy does not answer its settings are not shown, the page says so, and the gateway\'s settings still work', async (t) => {
+  if (!browser) return t.skip(why);
+  const g = await start({ proxyDown: true });
+  try {
+    const page = await g.signIn('boss@example.com');
+    await page.goto(`${g.base}/gw/admin/policies`);
+    await page.getByText(/The model proxy did not answer/).waitFor();
+    assert.equal(await page.getByLabel('Daily tokens per user').count(), 0);
+    const idle = page.locator('li', { has: page.getByLabel('Idle time before a workspace is paused') });
+    await idle.getByLabel('Idle time before a workspace is paused').fill('900');
+    await idle.getByRole('button', { name: 'Save' }).click();
+    await idle.getByText('Saved.').waitFor();
+    assert.equal(g.cfg.idleSeconds, 900);
     await page.context().close();
   } finally { g.close(); }
 });

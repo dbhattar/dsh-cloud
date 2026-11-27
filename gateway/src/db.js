@@ -41,6 +41,12 @@ export class Store {
       );
       CREATE INDEX IF NOT EXISTS audit_ts ON audit (ts);
       CREATE INDEX IF NOT EXISTS audit_user ON audit (user_id, ts);
+      CREATE TABLE IF NOT EXISTS policy_overrides (
+        key TEXT PRIMARY KEY,
+        value INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        updated_by INTEGER
+      );
       CREATE TABLE IF NOT EXISTS invites (
         code_hash TEXT PRIMARY KEY,
         note TEXT NOT NULL DEFAULT '',
@@ -245,6 +251,17 @@ export class Store {
   listAdmins() {
     return this.db.prepare('SELECT id, email FROM users WHERE is_admin = 1 ORDER BY id').all();
   }
+  // ---- admin-editable settings (policy.js) ----
+  policyOverrides() {
+    return this.db.prepare('SELECT key, value, updated_at, updated_by FROM policy_overrides').all().map((r) => ({ key: r.key, value: Number(r.value), updatedAt: r.updated_at, updatedBy: r.updated_by ?? null }));
+  }
+  setPolicy(key, value, by = null, now = Date.now()) {
+    this.db.prepare('INSERT INTO policy_overrides (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at, updated_by = excluded.updated_by').run(key, value, now, by);
+  }
+  deletePolicy(key) {
+    this.db.prepare('DELETE FROM policy_overrides WHERE key = ?').run(key);
+  }
+
   // ---- accounts, for the admin pages ----
   /**
    * Accounts with when they were last active (sign-in or workspace start), newest sign-up first. `q` matches part of the email

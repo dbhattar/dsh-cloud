@@ -27,7 +27,23 @@ export class UsageStore {
         requests INTEGER NOT NULL DEFAULT 0,
         PRIMARY KEY (user_id, day)
       );
+      CREATE TABLE IF NOT EXISTS policy (
+        key TEXT PRIMARY KEY,
+        value INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
     `);
+  }
+
+  /** Admin overrides of the settings in policy.js: [{ key, value, updatedAt }]. */
+  policyOverrides() {
+    return this.db.prepare('SELECT key, value, updated_at FROM policy').all().map((r) => ({ key: r.key, value: Number(r.value), updatedAt: r.updated_at }));
+  }
+  setPolicy(key, value, now = Date.now()) {
+    this.db.prepare('INSERT INTO policy (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at').run(key, value, now);
+  }
+  deletePolicy(key) {
+    this.db.prepare('DELETE FROM policy WHERE key = ?').run(key);
   }
 
   /** Issue a fresh token for the user, invalidating any previous one. The plaintext is returned once. */
