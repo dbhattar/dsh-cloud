@@ -81,7 +81,7 @@ test('the probe it writes is valid shell, checks the right things, and is aimed 
   const script = r.docker.probe();
   const syntax = spawnSync('sh', ['-n'], { input: script, encoding: 'utf8' });
   assert.equal(syntax.status, 0, syntax.stderr);
-  for (const needle of ['https://example.com/', 'http://example.com:8080/', '169.254.169.254', '10.0.0.1', 'KEY|PASSWORD|SECRET|TOKEN', 'curl wget git python3 jq node npm', 'direct TCP']) assert.ok(script.includes(needle), needle);
+  for (const needle of ['https://example.com/', 'http://example.com:8080/', '169.254.169.254', '10.0.0.1', 'KEY|PASSWORD|SECRET|TOKEN', 'curl wget git python3 pip jq rg unzip node npm httpx nuclei', 'direct TCP']) assert.ok(script.includes(needle), needle);
   assert.ok(!script.includes('$HOST') && !script.includes('${'), 'the host is filled in, not left as a variable');
   const other = run(['dsh-sbx-9'], { env: { PROBE_HOST: 'staging.example.org' } });
   assert.ok(other.docker.probe().includes('https://staging.example.org/'));

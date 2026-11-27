@@ -1,0 +1,13 @@
+# Release binaries in the sandbox image, pinned by version and SHA-256 for each architecture. Managed by scripts/pin-tools.sh;
+# installed (and checked again) at image build by sandbox/install-tools.sh.
+#
+# tool  version  arch  sha256  url  checksums-url
+# To move a tool: change the version in its url and checksums-url, run scripts/pin-tools.sh --update, review the diff.
+httpx 1.12.0 amd64 9d8439e8b6c9aa7d1e2314817a392e00d5178da3af5652f7475f88868f418f76 https://github.com/projectdiscovery/httpx/releases/download/v1.12.0/httpx_1.12.0_linux_amd64.zip https://github.com/projectdiscovery/httpx/releases/download/v1.12.0/httpx_1.12.0_checksums.txt
+httpx 1.12.0 arm64 fd7b123c1dfbc3d69f19f524e4eebcd6ec06b9a6cbd56813c76f11645197331e https://github.com/projectdiscovery/httpx/releases/download/v1.12.0/httpx_1.12.0_linux_arm64.zip https://github.com/projectdiscovery/httpx/releases/download/v1.12.0/httpx_1.12.0_checksums.txt
+nuclei 3.11.1 amd64 ea63d4ae232808cd7c6bc00d0142428e231fab59dae01042246097d195835ab6 https://github.com/projectdiscovery/nuclei/releases/download/v3.11.1/nuclei_3.11.1_linux_amd64.zip https://github.com/projectdiscovery/nuclei/releases/download/v3.11.1/nuclei_3.11.1_checksums.txt
+nuclei 3.11.1 arm64 8044e3d9768ba0a744b2872c1a87e813006f013da97ca9f50f7661a4203bec07 https://github.com/projectdiscovery/nuclei/releases/download/v3.11.1/nuclei_3.11.1_linux_arm64.zip https://github.com/projectdiscovery/nuclei/releases/download/v3.11.1/nuclei_3.11.1_checksums.txt
+gitleaks 8.30.1 amd64 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_checksums.txt
+gitleaks 8.30.1 arm64 e4a487ee7ccd7d3a7f7ec08657610aa3606637dab924210b3aee62570fb4b080 https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_arm64.tar.gz https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_checksums.txt
+osv-scanner 2.7.1 amd64 fb7dab19a8bd9bbe5c3189f09d4b7ee1820c9553a23bac202648a56efd2f6ee8 https://github.com/google/osv-scanner/releases/download/v2.7.1/osv-scanner_linux_amd64 https://github.com/google/osv-scanner/releases/download/v2.7.1/osv-scanner_SHA256SUMS
+osv-scanner 2.7.1 arm64 983d22fbad9724514e3fcc6acc83b5fa64c5ffa6b0d9f510028f22c1b223ff81 https://github.com/google/osv-scanner/releases/download/v2.7.1/osv-scanner_linux_arm64 https://github.com/google/osv-scanner/releases/download/v2.7.1/osv-scanner_SHA256SUMS

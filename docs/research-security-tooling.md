@@ -57,6 +57,35 @@ Step 1 of [plan-first-security-test.md](plan-first-security-test.md). The probe 
 
 **Left behind:** the throwaway account `spike-shell@example.com` (user 11) and its sandbox in the local stack. There is no delete-user feature until P5-13b; suspend it from the admin panel or ignore it.
 
+## Toolbox result (2026-11-27): what step 2 put in the image and how it was checked
+
+Step 2 of [plan-first-security-test.md](plan-first-security-test.md). Built on aarch64 (the Lima VM); `sandbox/Dockerfile`, `sandbox/tools.lock`, `sandbox/install-tools.sh`, `sandbox/pytools.txt`, `scripts/pin-tools.sh`.
+
+| What | Version | Source |
+| --- | --- | --- |
+| `git`, `curl`, `jq`, `ripgrep`, `unzip`, `python3` with `pip` and `venv`, `ca-certificates` | Debian 12: git 2.39, curl 7.88, jq 1.6, ripgrep 13, Python 3.11, pip 23.0 | Debian packages |
+| `sqlmap`, `ffuf`, `gobuster`, `sslscan`, `testssl` | sqlmap 1.7.2 (it warns it is outdated), ffuf 1.1.0, gobuster 3.5, sslscan 2.0.7, testssl 3.0.8 | Debian packages. The command is **`testssl`**, not `testssl.sh` |
+| `httpx`, `nuclei`, `gitleaks`, `osv-scanner` | httpx 1.12.0, nuclei 3.11.1, gitleaks 8.30.1, osv-scanner 2.7.1 (osv-scalibr 0.5.3) | release binaries, pinned by SHA-256 for amd64 and arm64 in `sandbox/tools.lock` |
+| `bandit`, `pip-audit` | 1.9.4, 2.10.1 | PyPI, in `/opt/pytools` (last on `PATH`, so `pip` and `python3` stay the system ones) |
+
+**Cost:** the image went from 2.89 GB to **3.69 GB** (+0.8 GB); the build took 48 s with the harness layers cached. Licences of what was added: MIT (httpx, nuclei, gitleaks, ffuf), Apache-2.0 (osv-scanner, gobuster, bandit, pip-audit), GPL-2.0 or 3.0 (sqlmap, testssl, sslscan: separate programs in a hosted image, not redistributed, not linked).
+
+**Left out on purpose:** **trufflehog** is AGPL-3.0, whose network-use clause makes hosting it for others a question for counsel, and gitleaks covers secret scanning; **semgrep** is heavy and its community rules carry a licence that restricts use inside a hosted service (**not read in full here; to verify**). `nmap`, `masscan` and `hydra` are not installed: they cannot work without raw sockets and a route. Both omissions are listed in the Dockerfile so nobody re-adds them by accident.
+
+**Findings while building it**
+
+- **No extra writable roots were needed.** `HOME` is `/workspace`, so every cache and config directory (`~/.cache`, `~/.config/nuclei`, `~/.local`) is already inside the one writable root of the harness's confinement. The pitfall recorded for the old P5-5 (adding cache directories to `additionalWritableRoots`) does not arise. Checked: `nuclei` created `/workspace/.config/nuclei`, `pip install` wrote under `/workspace/.local`, a virtualenv worked, all inside the confined shell.
+- **`PIP_USER=1` breaks virtualenvs**, so it is not set. Pip falls back to a user install on its own when site-packages is read-only; `PIP_BREAK_SYSTEM_PACKAGES=1` only lets it past Debian's "externally managed" notice. Both `pip install x` and `python3 -m venv v && v/bin/pip install x` work (through the egress proxy).
+- **gitleaks ignores the well-known documentation keys** (`AKIA…EXAMPLE`): a test that plants one proves nothing. The test plants a fake token-shaped string assembled at run time, so the repository never holds a complete secret-shaped value.
+- **Go and Python tools honour the proxy variables**, as assumed: `httpx`, `curl`, `git`, `pip`, `pip-audit` and `osv-scanner` all went out through the egress proxy in the test, and the proxy log shows each destination; port 8080 and the metadata address stayed refused for the tools too.
+- **A real agent run** (`scripts/probe-agent-shell.sh --agent` in a sandbox recreated from the new image) lists every tool on its `PATH`, with the proxy behaviour and the hidden model token unchanged.
+
+**How it was verified:** `tests/phase6/toolbox.test.mjs` (7 checks, under gVisor, each tool run in the harness's exact bubblewrap confinement in a container with the sandbox's options, on a throwaway internal network with its own egress proxy; it does not touch the compose stack or any user's data): every tool answers with the pinned version; nothing that needs raw sockets is shipped and the root is read-only; git, `jq`, `rg` and `unzip` do real work; `httpx`, `ffuf`, `gobuster` and `nuclei` (with a template of our own) find what a local target holds; `gitleaks` finds a planted token and `bandit` an `eval`, and neither reports clean files; a virtualenv and the writable places; and, through the proxy, `curl`, a `git clone` over HTTPS, `pip`, `httpx`, and `osv-scanner` and `pip-audit` both finding `requests==2.19.0`'s known vulnerabilities, with the refusals still in the proxy log. `tests/sandbox/tools-lock.test.mjs` (6) covers the lock, the installer and `--update`. The first run of the Docker test failed three checks for reasons in the test itself (quoting, a banner line, the documentation-key allowlist), which is also the evidence that the checks can fail.
+
+**A gap this exposed:** a sandbox container keeps the image it was created from. Rebuilding `dsh-sandbox:latest` changes nothing for an existing workspace until its container is removed (`docker rm dsh-sbx-<id>`; the volumes stay, and the next start creates a new one from the current image). The runner does not recreate a container whose image is out of date. For one local user that is a one-line step; before more users exist the runner should do it (compare the container's image to the current one on start, recreate when they differ, audit it).
+
+**Not verified:** x86_64 (the lock covers amd64 and its hashes were checked against the projects' own checksums, but nothing amd64 was built or run); the interactive tools in the harness UI; nuclei's own template download (`nuclei -update-templates` goes to GitHub through the proxy and was not run, to avoid downloading a large template set in a test); `sqlmap` against a vulnerable target (version only).
+
 ## Verified from the source: the network path out of a sandbox
 
 Read in `egress-proxy/README.md` and `egress-proxy/src/*.js`, and `runner/src/spec.js`:
