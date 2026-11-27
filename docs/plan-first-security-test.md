@@ -1,6 +1,6 @@
 # Path to a first security test of the owner's two web apps, from the local setup
 
-Status: **plan approved (2026-11-27); steps 1 (the spike), 2 (the toolbox) and 3 (the safety limits) done, results in [research-security-tooling.md](research-security-tooling.md); step 4 (GitHub) next.** This is the shortest route through [plan-phase-6.md](plan-phase-6.md) to a first real use, written before any of it was built. Facts it relies on are in [research-security-tooling.md](research-security-tooling.md); anything not checked is marked **to verify**. Working rules: [../AGENTS.md](../AGENTS.md).
+Status: **plan approved (2026-11-27); steps 1 (the spike), 2 (the toolbox), 3 (the safety limits) and 4 (GitHub) done, results in [research-security-tooling.md](research-security-tooling.md) and [github-access.md](github-access.md); step 5 (skills) next. One manual check remains for step 4: a real private repository with a real token.** This is the shortest route through [plan-phase-6.md](plan-phase-6.md) to a first real use, written before any of it was built. Facts it relies on are in [research-security-tooling.md](research-security-tooling.md); anything not checked is marked **to verify**. Working rules: [../AGENTS.md](../AGENTS.md).
 
 
 ## Context
@@ -42,7 +42,9 @@ The real agent ran a fixed probe through its confined shell in a throwaway accou
 - Compose and `.env.example` pass the new settings; `egress-proxy/README.md` updated.
 - **Tests:** unit tests in `tests/egress-proxy/` (each limit, allowlist matching including wildcard and look-alike names, no bypass by IP literal or by a name that resolves into scope from outside, deny reasons logged); Docker case extending `tests/phase4/isolation.test.mjs`: a loop of requests from one sandbox is throttled while a neighbour is not, an out-of-scope host is refused and logged.
 
-### 4. Connect the GitHub repos (S to M)
+### 4. Connect the GitHub repos (S to M) — done 2026-11-27
+*Built as described below with `dsh-git` (login, logout, status) and a how-to in [github-access.md](github-access.md), which also records the risks plainly, a bug found in the first version (git rewrites a used credential, so a naive `logout` could leave the token), and the safer later design (S6-18). The terminal the how-to uses was checked in a real browser. The private-repository path is verified against a local server that demands credentials; the one manual check left is a real repository with a real token.*
+
 - **Public repo:** works as soon as step 2 lands (`git clone https://...` through the proxy).
 - **Private repo, first version:** a **fine-grained, read-only, single-repository token with a short expiry**, given to git through the workspace's credential store (`HOME` is the persisted workspace volume, so `~/.git-credentials` and `~/.gitconfig` persist). Documented how-to plus the risks stated plainly: the agent can read it and anything the agent reads can reach the model provider, so use a throwaway read-only token and revoke it after. No push access.
 - **Finding to record in the docs:** the earlier idea of injecting credentials at the egress proxy does not work for HTTPS, because a `CONNECT` tunnel is opaque TLS and the proxy cannot add a header without intercepting TLS. A later "Connect GitHub" feature would instead keep the token in the gateway and hand it to a git credential helper over the user's internal network (never on disk), with audit; not part of this path.

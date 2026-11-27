@@ -54,7 +54,7 @@ Each task is one topic branch and one pull request, with tests and documentation
 
 ### Slice 4: what a developer needs next (scope later)
 
-Working with repositories with credentials injected at the egress proxy (24); previewing what the agent builds (25); scheduled tasks that wake the sandbox (20); per-user snapshots (26); GitHub sign-in (29); bring-your-own key (27); account page (4). These get task breakdowns after slice 1 and 2 are in and measured.
+Working with repositories (24; see [github-access.md](github-access.md) for why credentials cannot be injected at the egress proxy); previewing what the agent builds (25); scheduled tasks that wake the sandbox (20); per-user snapshots (26); GitHub sign-in (29); bring-your-own key (27); account page (4). These get task breakdowns after slice 1 and 2 are in and measured.
 
 ### Slice 5: operating it (the admin panel)
 
@@ -231,7 +231,7 @@ These are gaps in what the product can do. Some come straight from code already 
 **A usable toolbox**
 22. **Real tooling in the image** (M, **found**): `sandbox/Dockerfile` is `node:24-slim` plus bubblewrap, so there is no git, Python, compiler or `make` unless the harness build bundles them (not checked). Decide a baseline for the audience (git, Python 3, build tools, common CLIs), keep the image reproducible, and keep the root read-only so installs go to the workspace volume.
 23. **Package installs that stick and are fast** (M): the egress proxy already allows public hosts on 80/443, so registries work; add a per-user cache volume for npm, pip and similar so repeat installs are quick and survive restarts. Consider a registry mirror allowlist for speed and for reducing exposure.
-24. **Working with real repositories** (M to L): clone from a URL or an uploaded zip; push to GitHub. Private repos need credentials the sandbox must not be able to leak: inject the token at the egress proxy for that host only, the same pattern as the model key, so it never sits in the sandbox environment or files.
+24. **Working with real repositories** (M to L): clone from a URL or an uploaded zip; push to GitHub. Private repos need credentials the sandbox must not be able to leak. **Corrected 2026-11-27:** injecting the token at the egress proxy cannot work for HTTPS (the proxy sees only a `CONNECT` tunnel with TLS inside; adding a header would mean intercepting TLS). The first version is a read-only, single-repository, short-lived token given to git with `dsh-git` (readable by the agent, so deliberately weak); the safer designs are importing the repository from outside the sandbox and GitHub sign-in. See [github-access.md](github-access.md).
 25. **See what the agent builds** (L): a way to open a dev server the agent starts (for example port 3000) through the gateway, on a separate origin so it cannot read the user's session. For the "build me an app" use case this is the difference between a demo and a product.
 
 **Continuity and control**

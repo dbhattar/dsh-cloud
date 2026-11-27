@@ -97,6 +97,10 @@ Step 3 of [plan-first-security-test.md](plan-first-security-test.md); details an
 - **Limits of the limits:** an HTTPS tunnel hides the requests inside it, so these limits bound tunnel churn and parallelism, not requests per second on a reused connection. The tools' own rate options and the methodology skills are the first line of control (step 5).
 - **Not exercised:** the base-list hosts for npm, Go modules, NVD, CISA, EPSS, osv-scanner's offline database and nuclei's template download (they are there because the tools use them, not because a test reached them); a per-user scope; x86_64.
 
+## GitHub access result (2026-11-27)
+
+Step 4 of [plan-first-security-test.md](plan-first-security-test.md); everything is in [github-access.md](github-access.md). Short version: public repositories clone with no setup; a private one needs a read-only, single-repository, short-lived token given to git with `dsh-git` in the harness's terminal (checked in a real browser: the prompt hides the token, status never shows it, logout removes it). The token is a file the agent can read, which is stated as the main risk and the reason for the token's limits. Credentials cannot be injected at the egress proxy for HTTPS (corrected in the plans). A bug in the first version of `dsh-git` (git rewrites a used credential's line, so `logout` could leave the token on disk) was found by a live test and is fixed with a regression test. The safer design, an import from outside the sandbox, is S6-18.
+
 ## Verified from the source: the network path out of a sandbox
 
 Read in `egress-proxy/README.md` and `egress-proxy/src/*.js`, and `runner/src/spec.js`:

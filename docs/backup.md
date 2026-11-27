@@ -2,6 +2,8 @@
 
 Phase 4, task E2. Two scripts: `scripts/backup.sh` takes the backup and proves it restores; `scripts/restore.sh` checks a backup or replaces live data with it.
 
+> **A workspace volume can hold a GitHub token.** If a user has run `dsh-git login` (docs/github-access.md), the token is in `/workspace/.config/dsh/git-credentials` and so in every backup of that volume. The token is meant to be read-only, single-repository and short-lived, but treat backups as sensitive, and note that `dsh-git logout` removes it from the live volume only.
+
 ## What is backed up
 
 | Data | Where it lives | How |
