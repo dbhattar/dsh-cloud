@@ -29,6 +29,34 @@ Date: 2026-11-26. Written for [plan-phase-6.md](plan-phase-6.md), which makes cy
 | Write to `/tmp` | works | |
 | `bwrap` (the harness's confinement) with a read-only bind of `/` | works | Confirms the shell-confinement mechanism still runs next to these tools. |
 
+## Spike result (2026-11-27): the real agent's shell and the network
+
+Step 1 of [plan-first-security-test.md](plan-first-security-test.md). The probe is `scripts/probe-agent-shell.sh`; rerun it after any change to the image, the entrypoint or the egress proxy.
+
+**Method.** A throwaway account in the live local stack (Lima VM, gVisor, aarch64), its real sandbox created by the runner with its real entrypoint, policy patch and environment. The probe script ran two ways: **directly in the container** (control) and **through the agent**: `dsh --profile headless` with the sandbox's own patch, one real model call (the free router) asking the agent to run `sh /workspace/probe-shell.sh` with its bash tool, which executes under the harness's bubblewrap confinement. The egress proxy's own log was read afterwards as an independent record. Only `example.com` and two addresses that must be refused were contacted.
+
+| Question | Result | How known |
+| --- | --- | --- |
+| What is in the image? | **Only `node` and `npm`** (Node 24). No `curl`, `wget`, `git`, `python3`, `pip`, `jq`, `rg`, `unzip`, `make`, `gcc`, `openssl`, `nc` or `dig` | measured, `command -v` in the image and again in the sandbox |
+| Does the agent's confined shell have the proxy settings? | **Yes**: `HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY` (and lower-case), `NODE_USE_ENV_PROXY=1`. The harness adds `::1,[::1]` to `NO_PROXY` | measured through the agent |
+| Does it reach the public internet? | **Yes, through the proxy**: `https://example.com/` and `http://example.com/` answered 200 | measured through the agent; the egress log shows `allow ... CONNECT example.com:443` and `:80` |
+| What is refused? | Port 8080 on a public host (`port 8080 not allowed`), the metadata address `169.254.169.254` and `10.0.0.1` (`resolves to a non-public address`) | measured; each refusal is in the egress log with its reason |
+| A tool that ignores the proxy? | A direct socket to a public address fails with `ENETUNREACH`: **no route** | measured |
+| Is the model's token visible to the agent's shell? | **No.** In the container's own shell `LLM_PROXY_TOKEN` is visible; in the agent's shell **no credential-shaped name is visible** | measured through the agent; the harness's subprocess scrub removes names matching `KEY|PASSWORD|SECRET|TOKEN` (read in `packages/subprocess/subprocess/src/index.ts`) while `HOME`, locale and proxy variables survive |
+| Does bubblewrap block the network? | **No.** The harness's confinement arguments contain no network namespace flag, and the harness's sandbox policy says network is "outside its vocabulary" (read in `packages/sandbox/sandbox-policy/README.md`) | read, and consistent with the measurements |
+
+**What this changes in the plan**
+
+- **Step 2 needs the whole tool list**: the image has nothing but Node, so the agent can neither clone a repository nor run any scanner until the toolbox lands. `npm` and Node's `fetch` work today, which is enough for the agent to make HTTP requests but not for the tools the work needs.
+- **Reachability is settled**: staging over HTTPS needs no network change. The operator scope list and rate limits (step 3) are the only network work, and they are about restraint, not reach.
+- **Tools must honour the proxy variables, or they have no network.** Node (with the flag the runner sets), `curl`, `git` and Python's `requests` do. Go programs (`nuclei`, `httpx`, `ffuf`, `gobuster`, `gitleaks`, `trufflehog`) read the standard proxy variables by default (**assumed from the Go standard library, to verify per tool in step 2**).
+- **A GitHub token cannot be an environment variable.** The scrub removes any name containing `TOKEN`, `KEY`, `SECRET` or `PASSWORD` from the agent's shell, so a `GITHUB_TOKEN` would not reach git. The credential-store file in the workspace (`~/.git-credentials`) is not an environment variable and is not scrubbed (**to verify in step 4**).
+- **Good news for confidentiality:** the per-user model token is not exposed to anything the agent runs, so a prompt-injected command cannot read and send it.
+
+**Not covered by this spike:** a tool other than `node` running in the confined shell (there is none yet); writable locations a tool needs beyond `/workspace` and `/tmp` (caches, step 2); how well the model behaves on real testing prompts (it followed this simple instruction exactly).
+
+**Left behind:** the throwaway account `spike-shell@example.com` (user 11) and its sandbox in the local stack. There is no delete-user feature until P5-13b; suspend it from the admin panel or ignore it.
+
 ## Verified from the source: the network path out of a sandbox
 
 Read in `egress-proxy/README.md` and `egress-proxy/src/*.js`, and `runner/src/spec.js`:
@@ -76,7 +104,7 @@ The probes ran on aarch64. Several things change on x86_64 production hosts: exp
 
 ## Not verified
 
-- The harness's confined shell (bubblewrap plus Landlock under the `sandbox-policy`) running each tool, and which extra writable roots a tool needs (relevant for caches, plan task S6-2).
+- Each security tool running in the harness's confined shell (the network and environment were checked in the spike above, with only `node` available), and which extra writable roots a tool needs (relevant for caches, plan task S6-2).
 - Real model behaviour on security tasks: whether the models behind `openrouter/free`, or a paid default, refuse routine defensive and authorised-testing requests, or produce poor results. This needs a small set of representative prompts run against the chosen model before the audience is promised anything.
 - The hosting provider's acceptable-use policy for outbound security testing traffic (no production host is chosen yet).
 - Legal questions about hosting security tools and about users' authorisation. These are for counsel, not for this repository.
