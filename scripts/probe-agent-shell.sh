@@ -37,7 +37,7 @@ echo "== proxy-related variables (the proxy address, not secrets):"
 env | grep -i -E '^(https?_proxy|no_proxy|node_use_env_proxy)=' | sort
 echo "== credential-shaped names visible to this shell (names only):"
 env | grep -i -E 'KEY|PASSWORD|SECRET|TOKEN' | sed 's/=.*//' | sort | tr '\n' ' '; echo "(end)"
-echo "== tools:"; for t in curl wget git python3 jq node npm; do printf "%s=%s " \$t "\$(command -v \$t || echo -)"; done; echo
+echo "== tools:"; for t in curl wget git python3 pip jq rg unzip node npm httpx nuclei ffuf gobuster sqlmap sslscan testssl gitleaks osv-scanner bandit pip-audit; do printf "%s=%s " \$t "\$(command -v \$t || echo -)"; done; echo
 probe() { node -e "
 const [name,url]=process.argv.slice(1);
 const t=setTimeout(()=>{console.log(name,'TIMEOUT');process.exit()},12000);

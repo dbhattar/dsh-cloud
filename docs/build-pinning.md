@@ -10,6 +10,8 @@ Phase 4, task E3. What is pinned, how to move a pin, and what CI runs.
 | Harness build image | `node:24.22.3-bookworm@sha256:…` | `sandbox/harness.Dockerfile` |
 | Caddy | `caddy:2.11.9@sha256:…` | both compose files |
 | Backup helper image | the same Node digest | `scripts/backup.sh`, `scripts/restore.sh` |
+| Release binaries in the sandbox image (httpx, nuclei, gitleaks, osv-scanner) | version and SHA-256 per architecture (amd64 and arm64), each hash cross-checked against the project's own published checksums when it is written | `sandbox/tools.lock`, managed by `scripts/pin-tools.sh`, installed and verified at build by `sandbox/install-tools.sh` |
+| Python tools in the sandbox image (bandit, pip-audit) | exact versions (not hashes) in their own environment | `sandbox/pytools.txt` |
 | The harness inside the sandbox | commit, version and a content hash of the staged source | `sandbox/harness.lock` |
 | pnpm (harness build) | the version in the harness's `packageManager`, installed by corepack, with `--frozen-lockfile` | the harness repo |
 | gateway page dependencies | `gateway/web/package-lock.json`, installed with `npm ci` | CI and the gateway image |
@@ -20,6 +22,8 @@ Phase 4, task E3. What is pinned, how to move a pin, and what CI runs.
 ### Moving a pin
 
 - Base images: change the tag in the Dockerfile, run `scripts/pin-images.sh --update` (resolves the digest, needs Docker and network), review the diff, rebuild, run the suites. Dependabot proposes the same change weekly.
+- Release binaries: change the version in the tool's `url` and `checksums-url` in `sandbox/tools.lock`, run `scripts/pin-tools.sh --update` (downloads each artifact and refuses it unless its hash matches the project's published checksums file), review the diff, rebuild the image and run `tests/phase6/toolbox.test.mjs`. `scripts/pin-tools.sh --check` is offline and runs in CI; `--verify` re-downloads everything and compares (run it before a release). The installer fails the image build on any hash difference.
+- Not pinned by hash, and why: the Debian packages in the sandbox image (git, curl, sqlmap, ffuf and the rest) follow the pinned base image's Debian release, like `bubblewrap`; the Python tools are pinned by version only (`pip --require-hashes` would need a generated, per-architecture requirements file).
 - Harness: check out the commit you want in `../deepseek-harness`, run `scripts/harness-lock.sh --update`, commit `sandbox/harness.lock`.
 
 ## The harness lock

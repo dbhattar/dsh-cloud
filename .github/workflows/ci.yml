@@ -36,13 +36,15 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Base images are pinned by digest
         run: scripts/pin-images.sh --check
+      - name: Release binaries in the sandbox image are pinned by hash
+        run: scripts/pin-tools.sh --check
       - name: Harness lock file is present and well formed
         run: |
           grep -Eq '^commit=[0-9a-f]{40}$' sandbox/harness.lock
           grep -Eq '^source_hash=[0-9a-f]{64}$' sandbox/harness.lock
           grep -Eq '^version=.+' sandbox/harness.lock
       - name: Shell scripts parse
-        run: for f in scripts/*.sh scripts/lima/*.sh sandbox/entrypoint.sh tests/run.sh; do sh -n "$f" || exit 1; done
+        run: for f in scripts/*.sh scripts/lima/*.sh sandbox/entrypoint.sh sandbox/install-tools.sh tests/run.sh; do sh -n "$f" || exit 1; done
       - name: Compose files are valid
         env:
           RUNNER_SECRET: ci-runner-secret-0123456789

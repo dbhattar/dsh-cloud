@@ -1,6 +1,6 @@
 # Path to a first security test of the owner's two web apps, from the local setup
 
-Status: **plan approved (2026-11-27); step 1 (the spike) done, results below and in [research-security-tooling.md](research-security-tooling.md); step 2 next.** This is the shortest route through [plan-phase-6.md](plan-phase-6.md) to a first real use, written before any of it was built. Facts it relies on are in [research-security-tooling.md](research-security-tooling.md); anything not checked is marked **to verify**. Working rules: [../AGENTS.md](../AGENTS.md).
+Status: **plan approved (2026-11-27); steps 1 (the spike) and 2 (the toolbox) done, results in [research-security-tooling.md](research-security-tooling.md); step 3 next.** This is the shortest route through [plan-phase-6.md](plan-phase-6.md) to a first real use, written before any of it was built. Facts it relies on are in [research-security-tooling.md](research-security-tooling.md); anything not checked is marked **to verify**. Working rules: [../AGENTS.md](../AGENTS.md).
 
 
 ## Context
@@ -25,7 +25,9 @@ So reachability needs no new network path (the egress proxy already reaches publ
 ### 1. Spike: can the agent's shell reach staging? (S, no feature code) — done 2026-11-27
 The real agent ran a fixed probe through its confined shell in a throwaway account of the local stack. Result: reachability works as designed, nothing but Node is installed, and the model token is hidden from the agent's shell; details in [research-security-tooling.md](research-security-tooling.md). The probe is now `scripts/probe-agent-shell.sh` (with a test) so it can be rerun after the toolbox and the egress limits land.
 
-### 2. Toolbox for web testing and repo work (M; subset of phase 6 S6-1 and S6-6, replaces P5-4/P5-5 for now)
+### 2. Toolbox for web testing and repo work (M; subset of phase 6 S6-1 and S6-6, replaces P5-4/P5-5 for now) — done 2026-11-27
+*Built as described below, with these changes, all recorded in [research-security-tooling.md](research-security-tooling.md): `trufflehog` (AGPL-3.0) and `semgrep` (heavy, rules licence) left out; `whatweb` left out (it pulls in Ruby; `httpx` fingerprints); `bandit` and `pip-audit` added as the Python tools; no extra writable roots were needed because `HOME` is already under `/workspace`; the image is 3.69 GB (+0.8 GB).*
+
 - `sandbox/Dockerfile`: apt packages measured to exist on Debian 12 (aarch64): `git`, `curl`, `ca-certificates`, `python3` with `pip` and `venv`, `jq`, `ripgrep`, `unzip`, `sqlmap`, `ffuf`, `gobuster`, `sslscan`, `testssl.sh`, `whatweb`.
 - Release binaries with no Debian package, **pinned by version and SHA-256 per architecture** by a new `scripts/pin-tools.sh` (same pattern as `scripts/pin-images.sh`, listed in CI via the existing `sh -n` rule): `httpx`, `nuclei`, and for repo review `semgrep` (pip), `gitleaks`, `trufflehog`, `trivy`/`osv-scanner`. Check each licence before including.
 - Caches and `pip install --user` working in the confined shell: add the cache and install directories to the shell policy's extra writable roots (the known pitfall; patch in `sandbox/entrypoint.sh`, verify with `dsh --profile web --dump-config`), so tool databases (nuclei templates, trivy DB) persist in the user's volume.
