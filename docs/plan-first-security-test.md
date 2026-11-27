@@ -50,7 +50,8 @@ The real agent ran a fixed probe through its confined shell in a throwaway accou
 - **Finding to record in the docs:** the earlier idea of injecting credentials at the egress proxy does not work for HTTPS, because a `CONNECT` tunnel is opaque TLS and the proxy cannot add a header without intercepting TLS. A later "Connect GitHub" feature would instead keep the token in the gateway and hand it to a git credential helper over the user's internal network (never on disk), with audit; not part of this path.
 - **Tests:** a live case cloning a public repo through the proxy in the confined shell; the private-repo path is a documented manual check (needs a real token, never committed).
 
-### 5. Methodology skills (S; phase 6 S6-3 subset)
+### 5. Methodology skills (S; phase 6 S6-3 subset) — done 2026-11-27
+*Built as described below: four skills and an engagement template in `sandbox/skills/`, shipped by `COPY skills/ /opt/dsh-skills/` and `ENV DSH_BUNDLED_SKILL_DIR=/opt/dsh-skills`. **No patch row was needed** (the variable alone is enough; verified in a real browser: all four appear in the composer's `/` menu). Details, and what was learned (ffuf 1.1.0 has no `-rate`; no wordlists in the image), in [research-security-tooling.md](research-security-tooling.md#methodology-skills-result-2026-11-27). Not verified: how well the free model follows them.*
 `sandbox/skills/` with `web-app-testing` (scope first, passive then active, rate-aware, stop conditions), `secure-code-review`, `report-writing`, and `engagement-rules` (read the engagement file, stay in scope, never test production, never use real user data). Shipped to `/opt/dsh-skills`; the harness skill provider reads `$DSH_BUNDLED_SKILL_DIR` (documented option; **to verify** it needs no patch row). Test: every skill has valid frontmatter and a size budget; the live harness lists them.
 
 ### 6. The first engagement: calibrate, then the apps (M, mostly running, little code)

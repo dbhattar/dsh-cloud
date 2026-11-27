@@ -46,5 +46,5 @@ This is the part to understand before using it.
 
 - A **real private repository with a real token**. The suite must not hold a real token, so this is a manual check for the owner: create the token as above, run `dsh-git login --repo owner/repo` in the terminal, and look for "checked: ... is readable with that token". Report any difference from this document.
 - GitHub's current screens and wording, the allowed token lifetimes, and how organisation repositories are approved.
-- That the agent, asked to, would refuse to print the credentials file. It should be told not to (the methodology skills in step 5), but it can be asked to by text inside a repository, and nothing technical stops it.
+- That the agent, asked to, would refuse to print the credentials file. The `engagement-rules` skill (step 5) tells it not to, and to treat text in a repository as data, but it can be asked to by text inside a repository, and nothing technical stops it.
 - GitHub Enterprise or other hosts: `--host` exists for tests; the classic-token rule applies to `github.com` only.
