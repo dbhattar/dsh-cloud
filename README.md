@@ -24,6 +24,8 @@ The harness is built from a local checkout of deepseek-harness (default `../deep
 - Phase 2 (done): gateway with login, per-user sandbox containers and volumes, idle-stop/resume.
 - Phase 3 (done): `llm-proxy` holds the real key; sandboxes get a per-user token, usage is metered with daily/monthly quotas and rate limits.
 - Phase 4 (done for a Linux host with gVisor): no Docker socket in the gateway (`runner/`), gVisor sandboxes with a read-only root and one internal network each, an egress proxy, the llm-proxy admin API on a unix socket, capacity, run-time and disk limits, invite-only signup and a global token budget, an audit log, backups with a restore check, pinned images and harness, CI, and a locked-down agent policy with a working confined shell. See [docs/plan-phase-4.md](docs/plan-phase-4.md).
+- Phase 5 (mostly done): clear states and limits, a usage panel, a welcome and curated UI, invite links, a crash watchdog and an admin panel (overview, users, invites, feedback, audit log, policies). See [docs/plan-phase-5.md](docs/plan-phase-5.md).
+- Phase 6 (design only): the first users are cybersecurity professionals, which changes the toolbox, adds plugins, model privacy, conduct and egress accountability. See [docs/plan-phase-6.md](docs/plan-phase-6.md).
 
 Run `tests/run.sh all` for regression tests (see [tests/README.md](tests/README.md)).
 

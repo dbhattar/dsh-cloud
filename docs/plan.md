@@ -4,7 +4,7 @@
 
 `dsh --profile web` already serves a full browser UI (`apps/web`, `packages/client/*`) over HTTP `/api` plus WebSocket `/api/remote.mux`. It is single-owner: one launch token, one shared owner Peer, one `$DSH_HOME`, and no tenancy. Sandboxing covers file effects only and shares the host kernel. `SAFETY.md` says it is not for untrusted workloads, and the container execution backend does not exist (`packages/ptc-runtime` notes it as undecided; E2B was removed, `packages/host/apiproxy` is stale build output only).
 
-Chosen: public/untrusted users, operator-owned shared DeepSeek key.
+Chosen: public/untrusted users, operator-owned shared DeepSeek key. **Audience (2026-11-26): cybersecurity professionals are the first users** (earlier phases assumed developers); see [plan-phase-6.md](plan-phase-6.md).
 
 ## Recommended architecture: control plane + one disposable sandbox per user
 
@@ -79,7 +79,8 @@ Only if the above proves insufficient. Read first: `docs/architecture.md` (Appli
 2. Control plane: auth, user→sandbox mapping, spawn/stop, persistent volumes. **Done.**
 3. LLM proxy with per-user metering and quotas. **Done.**
 4. Hardening: gVisor, egress policy, resource limits, audit logging, abuse controls, backups, pinned builds, CI. **Done** for a Linux host with gVisor; see [plan-phase-4.md](plan-phase-4.md) for what was verified and what is left. A microVM backend (Kata or Firecracker) and a formal sandbox-escape review were not done.
-5. Friendlier experience: first-run polish, clear limits and states, a usable toolbox, work that keeps running. Scope chosen, not started; see [plan-phase-5.md](plan-phase-5.md).
+5. Friendlier experience: first-run polish, clear limits and states, work that keeps running, an admin panel. Mostly done; see [plan-phase-5.md](plan-phase-5.md) for what is and is not (its toolbox tasks moved to phase 6).
+6. A workspace for security professionals, the first real audience: the toolbox, plugins, model privacy, conduct and egress accountability, then scoped active testing. Design and task breakdown, nothing built; see [plan-phase-6.md](plan-phase-6.md) and [research-security-tooling.md](research-security-tooling.md).
 
 ## Verification
 
