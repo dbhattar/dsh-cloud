@@ -1,3 +1,4 @@
+import { secretProblem } from '../../common/secret.js';
 /** Friendly name for the model picker: MODEL_DISPLAY_NAME, else a known friendly name for the default model, else none. */
 function modelDisplayName(env) {
   const FRIENDLY = { 'openrouter/free': 'Free models (automatic)' };
@@ -18,7 +19,8 @@ export function loadConfig(env = process.env) {
   if (!publicUrl) throw new Error('PUBLIC_URL is required (e.g. https://localhost/)');
   const url = new URL(publicUrl);
   const secret = env.RUNNER_SECRET || '';
-  if (secret.length < 16) throw new Error('RUNNER_SECRET is required (min 16 chars)');
+  const problem = secretProblem(secret);
+  if (problem) throw new Error(`RUNNER_SECRET ${problem}`);
   // gVisor by default, and plain runc only when the operator says so in words (docs/security-review.md, SEC-05). Sandboxes run commands
   // an AI wrote; under runc they share the host's kernel. An unset, empty or `runc` value used to be accepted silently, so a host
   // without gVisor ran every user's agent on the host kernel and the visible symptom was only a broken shell tool.

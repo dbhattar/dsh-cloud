@@ -11,9 +11,13 @@ FROM node:24.22.3-slim@sha256:dc26ae92c9fb15cf6b1d63e20f0944b2efe0f115b20e00be48
 WORKDIR /app
 COPY package.json ./
 COPY src ./src
+COPY --from=common . /common
 COPY --from=web /web/dist ./web/dist
-# Runs as root only to use the mounted Docker socket (prototype; see infra/README.md).
-# Admin socket directory of llm-proxy (volume shared with it); owned by node so either image can initialise it.
-RUN mkdir /run/llm-admin /run/gw && chown node:node /run/llm-admin /run/gw
-ENV NODE_NO_WARNINGS=1
+# The gateway does not mount the Docker socket and does not run as root: the entrypoint starts as root with three capabilities only to take
+# over the volumes made by earlier versions, then drops everything and runs `node` (docs/security-review.md, SEC-10).
+# /data is the database, /run/llm-admin the llm-proxy's admin socket (shared with it), /run/gw the gateway's own socket (shared with Caddy).
+RUN mkdir /data /run/llm-admin /run/gw && chown node:node /data /run/llm-admin /run/gw
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+ENV NODE_NO_WARNINGS=1 DATA_DIR=/data
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["node", "src/index.js"]

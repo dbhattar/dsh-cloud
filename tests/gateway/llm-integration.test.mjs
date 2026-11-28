@@ -10,7 +10,7 @@ import { createGateway } from '../../gateway/src/server.js';
 
 const REAL_KEY = 'sk-REAL-upstream-key-do-not-leak';
 const cfgOf = (extra = {}) => ({
-  ...loadConfig({ PUBLIC_URL: 'https://localhost/', LLM_ADMIN_SOCKET: '/run/llm-admin/admin.sock', LLM_ADMIN_SECRET: 'admin-secret-0123456789', RUNNER_URL: 'http://sandbox-runner:8090', RUNNER_SECRET: 'runner-secret-0123456789', ...extra }),
+  ...loadConfig({ PUBLIC_URL: 'https://localhost/', LLM_ADMIN_SOCKET: '/run/llm-admin/admin.sock', LLM_ADMIN_SECRET: 'admin-secret-01234567890', RUNNER_URL: 'http://sandbox-runner:8090', RUNNER_SECRET: 'runner-secret-0123456789', ...extra }),
   startTimeoutSeconds: 5,
 });
 

@@ -1,3 +1,5 @@
+# DO NOT DEPLOY. This is the phase 1 prototype (infra/docker-compose.yml): it proxies straight to a sandbox with no gateway in front, so there is
+# no sign-in. The stack is infra/docker-compose.gateway.yml with Caddyfile.gateway (development) or Caddyfile.production (docs/security-review.md, SEC-11).
 localhost {
 	tls internal
 	# Caddy preserves Host and forwards WebSocket upgrades by default.

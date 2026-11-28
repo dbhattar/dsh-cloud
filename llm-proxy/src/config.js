@@ -1,3 +1,4 @@
+import { secretProblem } from '../../common/secret.js';
 /** Environment configuration. Fails fast on anything that would make the proxy unsafe or useless. */
 export function loadConfig(env = process.env) {
   const int = (k, d) => {
@@ -12,7 +13,8 @@ export function loadConfig(env = process.env) {
   };
   const upstreamApiKey = need('UPSTREAM_API_KEY');
   const adminSecret = need('ADMIN_SECRET');
-  if (adminSecret.length < 16) throw new Error('ADMIN_SECRET must be at least 16 characters');
+  const problem = secretProblem(adminSecret);
+  if (problem) throw new Error(`ADMIN_SECRET ${problem}`);
   const allowedModels = (env.ALLOWED_MODELS ?? '')
     .split(',')
     .map((s) => s.trim())
