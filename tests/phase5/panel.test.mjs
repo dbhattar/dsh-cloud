@@ -25,6 +25,8 @@ const ENV = {
   MONTHLY_TOKEN_QUOTA: '0',
   GLOBAL_DAILY_TOKEN_BUDGET: '0',
 };
+/** These tests are about the limits panel, not the first-visit welcome (welcome.test.mjs): dismiss it, or its dialog covers the chip. */
+const welcomed = async (u) => { await request('/gw/api/welcome', { method: 'POST', headers: { cookie: u.cookie, origin: 'https://localhost' } }); return u; };
 const users = {};
 let owned = false;
 let browser = null;
@@ -51,7 +53,7 @@ before(async () => {
   if (b.available) browser = await b.launch(); else browserWhy = b.why;
   compose(FILE, ['up', '-d', '--build'], ENV);
   await waitFor(async () => (await request('/gw/healthz')).status === 200, { what: 'gateway healthz' });
-  users.a = await signupUser('a', run);
+  users.a = await welcomed(await signupUser('a', run));
   await post(users.a, '/gw/api/start');
   await waitSandboxUp(users.a);
 });

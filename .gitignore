@@ -9,5 +9,6 @@ dist/
 # Staged copy of the local deepseek-harness for the image build (scripts/stage-harness.sh)
 sandbox/.harness-src/
 sandbox/.harness-dist/
+sandbox/.harness-dist.tmp/
 *.code-workspace
 backups/

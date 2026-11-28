@@ -9,4 +9,4 @@
 #
 # Runs inside the gateway container, so point docker at the right daemon first (scripts/lima/docker-context.sh).
 set -eu
-exec docker exec "${GATEWAY_CONTAINER:-dshcloud-gateway-1}" node src/cli.js invite "$@"
+exec docker exec -u node "${GATEWAY_CONTAINER:-dshcloud-gateway-1}" node src/cli.js invite "$@"

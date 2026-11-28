@@ -29,12 +29,13 @@ case "$MODE" in
     refs | while read -r file ref; do
       case "$ref" in
         scratch|dsh-sandbox:latest) continue ;; # no registry image / the locally built sandbox image
+        '${GATEWAY_IMAGE:-dshcloud-gateway:latest}'|'${RUNNER_IMAGE:-dshcloud-sandbox-runner:latest}'|'${LLM_PROXY_IMAGE:-dshcloud-llm-proxy:latest}'|'${EGRESS_PROXY_IMAGE:-dshcloud-egress-proxy:latest}'|'${SANDBOX_IMAGE:-dsh-sandbox:latest}') continue ;; # our own five images: built locally by default, a registry digest on a server (docs/deploy-images.md)
         *:*@sha256:????????????????????????????????????????????????????????????????) ;;
         *) echo "not pinned by tag and digest: $file: $ref" >&2; echo bad >> /tmp/pin-bad.$$ ;;
       esac
     done
     if [ -f /tmp/pin-bad.$$ ]; then rm -f /tmp/pin-bad.$$; exit 1; fi
-    echo "all $(refs | grep -vc ' scratch$\| dsh-sandbox:latest$') images are pinned by digest"
+    echo "all $(refs | grep -vc ' scratch$\| dsh-sandbox:latest$\| \${[A-Z_]*_IMAGE:-') images are pinned by digest"
     ;;
   --update)
     refs | while read -r file ref; do

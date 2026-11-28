@@ -3,7 +3,7 @@
 import test, { before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
-import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -76,6 +76,24 @@ test('a damaged or incomplete backup fails the restore check', () => {
   rmSync(join(missing, 'volumes', `${userVolumes(users.a.id).find((n) => n.startsWith('dsh-ws-'))}.tar.gz`));
   assert.notEqual(script('restore.sh', '--check', missing).status, 0, 'a missing archive');
   assert.equal(tryDocker('volume', 'ls', '-q', '--filter', 'name=dsh-restorecheck-'), '', 'scratch volumes are removed even on failure');
+});
+
+const hasAge = spawnSync('age-keygen', ['--version'], { encoding: 'utf8' }).status === 0;
+test('SEC-13: an encrypted backup is owner-only, holds no plaintext, and restores (--check) only with the private key', { skip: hasAge ? false : 'age is not installed (apt install age)' }, () => {
+  const keyFile = join(outDir, 'age.key');
+  const gen = spawnSync('age-keygen', ['-o', keyFile], { encoding: 'utf8' });
+  const pub = /(age1[a-z0-9]+)/.exec(gen.stderr + gen.stdout)[1];
+  const r = script('backup.sh', '--out', outDir, '--encrypt-to', pub);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  const enc = r.stdout.match(/Backup complete: (.+)/)[1].trim();
+  assert.match(enc, /\.tar\.age$/);
+  assert.equal(statSync(enc).mode & 0o777, 0o600);
+  assert.ok(!existsSync(enc.replace(/\.tar\.age$/, '')), 'the plaintext directory is gone');
+  assert.ok(!readFileSync(enc).includes('SQLite format 3'), 'no database header in the clear');
+  const ok = script('restore.sh', '--check', enc, '--identity', keyFile);
+  assert.equal(ok.status, 0, ok.stdout + ok.stderr);
+  const other = join(outDir, 'other.key'); spawnSync('age-keygen', ['-o', other]);
+  assert.notEqual(script('restore.sh', '--check', enc, '--identity', other).status, 0, 'another key cannot open it');
 });
 
 test('restore --yes refuses while the stack or a sandbox is running', () => {

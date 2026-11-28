@@ -92,3 +92,7 @@ Not covered: microVM isolation, the browser UI of the locked-down policy, `linux
 ## Safety guard
 
 The Docker suites use the compose project, container (`dsh-sbx-N`) and volume (`dsh-data-N`, `dshcloud_*`) names of a local dev stack and delete them on cleanup. They refuse to start when such data exists (a dev stack with accounts, or leftovers of a failed run). Remove it deliberately (`scripts/restart.sh --wipe`) or set `DSH_TESTS_ALLOW_DESTRUCTIVE=1`.
+| `scripts/harness-lock` | SEC-12: the lock refuses dirty and unpushed commits, `--check` stages the locked commit and ignores the working tree, an untracked secret is not staged by `--commit`, only full commit ids, and the committed lock is clean. Throwaway git repositories, no Docker |
+| `scripts/publish-images` | SEC-12: five images built and pushed with a stub `docker`, digests written, a dirty or different harness / dirty tree / bad registry refused, no `images.env` without a digest |
+| `scripts/operator-exec-user` | the operator scripts and the Docker suites run the gateway CLI as `node`, not root (a root exec cannot write the database the unprivileged gateway owns) |
+| `scripts/backup-security` | SEC-13: owner-only modes, default location outside the checkout, encryption with a stub `age`, refusal without `age`, pruning by age, decrypting with the right and wrong key, nothing left in `TMPDIR`, a hostile archive member refused |

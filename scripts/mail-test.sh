@@ -10,4 +10,4 @@
 # This SENDS A REAL MESSAGE with the mailgun provider: use an address you own.
 set -eu
 case "${1:-}" in -h|--help|'') sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'; [ -n "${1:-}" ] && exit 0 || exit 2;; esac
-exec docker exec "${GATEWAY_CONTAINER:-dshcloud-gateway-1}" node src/cli.js mail test "$1"
+exec docker exec -u node "${GATEWAY_CONTAINER:-dshcloud-gateway-1}" node src/cli.js mail test "$1"

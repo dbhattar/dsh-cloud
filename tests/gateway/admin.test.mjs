@@ -190,9 +190,9 @@ function script(args) {
 }
 
 test('scripts/make-admin.sh: grant, revoke and list go to the gateway container; bad use is refused without calling it', () => {
-  assert.deepEqual(script(['me@example.com']).calls, ['exec dshcloud-gateway-1 node src/cli.js admin grant me@example.com']);
-  assert.deepEqual(script(['--revoke', 'me@example.com']).calls, ['exec dshcloud-gateway-1 node src/cli.js admin revoke me@example.com']);
-  assert.deepEqual(script(['--list']).calls, ['exec dshcloud-gateway-1 node src/cli.js admin list']);
+  assert.deepEqual(script(['me@example.com']).calls, ['exec -u node dshcloud-gateway-1 node src/cli.js admin grant me@example.com']);
+  assert.deepEqual(script(['--revoke', 'me@example.com']).calls, ['exec -u node dshcloud-gateway-1 node src/cli.js admin revoke me@example.com']);
+  assert.deepEqual(script(['--list']).calls, ['exec -u node dshcloud-gateway-1 node src/cli.js admin list']);
   for (const bad of [[], ['--revoke'], ['--nope']]) {
     const r = script(bad);
     assert.equal(r.status, 2, JSON.stringify(bad));

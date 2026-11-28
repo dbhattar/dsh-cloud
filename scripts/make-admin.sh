@@ -12,8 +12,8 @@ usage() { sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'; }
 GATEWAY="${GATEWAY_CONTAINER:-dshcloud-gateway-1}"
 case "${1:-}" in
   -h|--help|"") usage; [ -n "${1:-}" ] || exit 2; exit 0 ;;
-  --list) exec docker exec "$GATEWAY" node src/cli.js admin list ;;
-  --revoke) [ -n "${2:-}" ] || { usage; exit 2; }; exec docker exec "$GATEWAY" node src/cli.js admin revoke "$2" ;;
+  --list) exec docker exec -u node "$GATEWAY" node src/cli.js admin list ;;
+  --revoke) [ -n "${2:-}" ] || { usage; exit 2; }; exec docker exec -u node "$GATEWAY" node src/cli.js admin revoke "$2" ;;
   -*) echo "unknown option: $1 (try --help)" >&2; exit 2 ;;
-  *) exec docker exec "$GATEWAY" node src/cli.js admin grant "$1" ;;
+  *) exec docker exec -u node "$GATEWAY" node src/cli.js admin grant "$1" ;;
 esac

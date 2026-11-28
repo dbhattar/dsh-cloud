@@ -35,7 +35,7 @@ const docker = (...a) => sh('docker', a, { maxBuffer: 64 * 1024 * 1024 }).trim()
 const tryDocker = (...a) => { try { return docker(...a); } catch { return ''; } };
 const status = async (u) => JSON.parse((await request('/gw/api/status', { headers: { cookie: u.cookie } })).body);
 const post = (u, path) => request(path, { method: 'POST', headers: { cookie: u.cookie, origin: 'https://localhost' } });
-const audit = (event) => tryDocker('exec', 'dshcloud-gateway-1', 'node', 'src/cli.js', 'audit', '--event', event, '--since', '1h', '--json').split('\n').filter(Boolean).map((l) => JSON.parse(l));
+const audit = (event) => tryDocker('exec', '-u', 'node', 'dshcloud-gateway-1', 'node', 'src/cli.js', 'audit', '--event', event, '--since', '1h', '--json').split('\n').filter(Boolean).map((l) => JSON.parse(l));
 
 before(async () => {
   assertNoDevData();

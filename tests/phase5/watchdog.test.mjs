@@ -27,7 +27,7 @@ const docker = (...a) => sh('docker', a, { maxBuffer: 64 * 1024 * 1024 }).trim()
 const tryDocker = (...a) => { try { return docker(...a); } catch { return ''; } };
 const status = async (u) => JSON.parse((await request('/gw/api/status', { headers: { cookie: u.cookie } })).body);
 const startedAt = (u) => tryDocker('inspect', '-f', '{{.State.StartedAt}}', u.container);
-const audit = (u, event) => tryDocker('exec', 'dshcloud-gateway-1', 'node', 'src/cli.js', 'audit', '--user', String(u.id), '--event', event, '--json');
+const audit = (u, event) => tryDocker('exec', '-u', 'node', 'dshcloud-gateway-1', 'node', 'src/cli.js', 'audit', '--user', String(u.id), '--event', event, '--json');
 
 /** Kill the harness (the container's main process) the way a crash does, and wait for the next start to be up. */
 async function crashAndWaitRestart(u) {

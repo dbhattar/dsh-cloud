@@ -38,7 +38,7 @@ let owned = false;
 const docker = (...a) => sh('docker', a, { maxBuffer: 64 * 1024 * 1024 }).trim();
 const tryDocker = (...a) => { try { return docker(...a); } catch { return ''; } };
 const running = (u) => tryDocker('inspect', '-f', '{{.State.Running}}', u.container) === 'true';
-const audit = () => docker('exec', GATEWAY, 'node', 'src/cli.js', 'audit', '--json', '--limit', '500').split('\n').filter(Boolean).map((l) => JSON.parse(l));
+const audit = () => docker('exec', '-u', 'node', GATEWAY, 'node', 'src/cli.js', 'audit', '--json', '--limit', '500').split('\n').filter(Boolean).map((l) => JSON.parse(l));
 
 before(async () => {
   assertNoDevData();

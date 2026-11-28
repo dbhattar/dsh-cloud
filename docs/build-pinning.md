@@ -12,7 +12,7 @@ Phase 4, task E3. What is pinned, how to move a pin, and what CI runs.
 | Backup helper image | the same Node digest | `scripts/backup.sh`, `scripts/restore.sh` |
 | Release binaries in the sandbox image (httpx, nuclei, gitleaks, osv-scanner) | version and SHA-256 per architecture (amd64 and arm64), each hash cross-checked against the project's own published checksums when it is written | `sandbox/tools.lock`, managed by `scripts/pin-tools.sh`, installed and verified at build by `sandbox/install-tools.sh` |
 | Python tools in the sandbox image (bandit, pip-audit) | exact versions (not hashes) in their own environment | `sandbox/pytools.txt` |
-| The harness inside the sandbox | commit, version and a content hash of the staged source | `sandbox/harness.lock` |
+| The harness inside the sandbox | one commit (clean, pushed), version and a content hash of what that commit stages | `sandbox/harness.lock` |
 | pnpm (harness build) | the version in the harness's `packageManager`, installed by corepack, with `--frozen-lockfile` | the harness repo |
 | gateway page dependencies | `gateway/web/package-lock.json`, installed with `npm ci` | CI and the gateway image |
 | GitHub Actions in CI | full commit id, version in a comment | `.github/workflows/ci.yml` |
@@ -24,13 +24,11 @@ Phase 4, task E3. What is pinned, how to move a pin, and what CI runs.
 - Base images: change the tag in the Dockerfile, run `scripts/pin-images.sh --update` (resolves the digest, needs Docker and network), review the diff, rebuild, run the suites. Dependabot proposes the same change weekly.
 - Release binaries: change the version in the tool's `url` and `checksums-url` in `sandbox/tools.lock`, run `scripts/pin-tools.sh --update` (downloads each artifact and refuses it unless its hash matches the project's published checksums file), review the diff, rebuild the image and run `tests/phase6/toolbox.test.mjs`. `scripts/pin-tools.sh --check` is offline and runs in CI; `--verify` re-downloads everything and compares (run it before a release). The installer fails the image build on any hash difference.
 - Not pinned by hash, and why: the Debian packages in the sandbox image (git, curl, sqlmap, ffuf and the rest) follow the pinned base image's Debian release, like `bubblewrap`; the Python tools are pinned by version only (`pip --require-hashes` would need a generated, per-architecture requirements file).
-- Harness: check out the commit you want in `../deepseek-harness`, run `scripts/harness-lock.sh --update`, commit `sandbox/harness.lock`.
+- Harness: commit and push the change in the harness repository, check out that commit in `../deepseek-harness`, run `scripts/harness-lock.sh --update` (it refuses uncommitted changes and unpushed commits), commit `sandbox/harness.lock`. See [deploy-images.md](deploy-images.md).
 
 ## The harness lock
 
-The harness is built from a local checkout, so a commit id is not enough: the working tree can carry edits (the current one does, `dirty=yes`). The lock therefore records the commit, the version and a SHA-256 over every file that would be staged. `scripts/build-harness.sh --locked` refuses to build unless all three match, so a release build is either exactly what was locked or it fails loudly. Day-to-day builds do not use `--locked`; `scripts/restart.sh` already warns when the checkout changed since the last build. The built image carries `BUILD_INFO` (commit, hash, build time) under `/opt/dsh`.
-
-A locked, dirty checkout reproduces the build only while the same uncommitted files exist. To make a release reproducible from a commit, commit the harness changes first and update the lock.
+The lock pins **one commit** of the harness repository: `repo=`, `commit=`, `dirty=no`, `version=` and `source_hash=`, a SHA-256 over every file that commit stages. `scripts/build-harness.sh --locked` runs `harness-lock.sh --check` (which stages the locked commit with `git archive` and recomputes the hash, ignoring the working tree) and builds from exactly that commit, so a release build is what was locked or it fails loudly. A lock with `dirty=yes`, which earlier versions allowed (the committed lock said `dirty=yes` until 2026-11-28), is refused: it pinned a hash of uncommitted local edits that nothing else could rebuild. Day-to-day builds do not use `--locked` and still stage the working tree; `scripts/restart.sh` warns when the checkout changed since the last build. The built image carries `BUILD_INFO` (commit, hash, `dirty=`, build time) under `/opt/dsh`. How CI builds and publishes it: [deploy-images.md](deploy-images.md).
 
 ## Dependabot policy
 
@@ -53,7 +51,8 @@ A locked, dirty checkout reproduces the build only while the same uncommitted fi
 | Job | Runs | Time budget |
 | --- | --- | --- |
 | `unit` | builds the gateway pages (`npm ci && npm run build`), then `tests/run.sh unit` on Node 24.22.3 | 15 min |
-| `checks` | pin check, harness lock well-formed, `sh -n` on every script, `docker compose config` | 10 min |
+| `checks` | pin check, harness lock well-formed and clean (`dirty=no`, `repo=`), `sh -n` on every script, `docker compose config` | 10 min |
+| `images.yml` (own workflow, manual or `v*` tag) | harness from the locked commit, `build-harness.sh --locked`, `publish-images.sh`: five images pushed, digests out | 60 min, never run yet |
 | `images` | builds gateway, runner, llm-proxy and egress-proxy | 20 min |
 | `acceptance` | manual (`workflow_dispatch`) on a self-hosted runner labelled `gvisor`: builds the harness `--locked`, runs the phase 2, 3 and 4 suites under `runsc` | 60 min |
 

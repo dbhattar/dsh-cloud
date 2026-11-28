@@ -10,4 +10,4 @@
 # Quota and budget hits are logged by the llm-proxy: docker logs dshcloud-llm-proxy-1 | grep '^.* audit '
 # Runs inside the gateway container, so point docker at the right daemon first (scripts/lima/docker-context.sh).
 set -eu
-exec docker exec "${GATEWAY_CONTAINER:-dshcloud-gateway-1}" node src/cli.js audit "$@"
+exec docker exec -u node "${GATEWAY_CONTAINER:-dshcloud-gateway-1}" node src/cli.js audit "$@"

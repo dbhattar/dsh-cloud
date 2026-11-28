@@ -52,7 +52,7 @@ after(async () => {
 test('the harness is configured, not just styled: the patch names the model and switches Automation tasks off', () => {
   const patch = docker('exec', users.a.container, 'cat', '/tmp/dsh-cloud-patch.yml');
   assert.match(patch, /- id: ui-schedule\n  disabled: true/);
-  assert.match(patch, /- id: "openrouter\/free"\n\s+name: "Free models \(automatic\)"/);
+  assert.match(patch, /- id: "openrouter\/free"\n(?:\s+\w+: .*\n)*\s+name: "Free models \(automatic\)"/);
 });
 
 test('/gw/api/me starts as not welcomed, and the limits payload carries the policy the welcome quotes', async () => {

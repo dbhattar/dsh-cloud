@@ -46,6 +46,18 @@ function fromSandbox(container, { path = '/chat/completions', url, method = 'POS
   return JSON.parse(out);
 }
 const chatFrom = (u, content = 'hello', extra = {}) => fromSandbox(u.container, { body: msg(content), ...extra });
+/**
+ * Like chatFrom, but waits while the sandbox cannot connect at all (status 0, "fetch failed"). After the llm-proxy restarts, or a sandbox is
+ * created, the connection fails for a few seconds even though the proxy reports healthy and is on the network (5 to 10 s measured on
+ * 2026-11-28, Lima VM under gVisor, and the same at commits 949f514 and 038768f, so it predates the security fixes; cause not found,
+ * docs/security-review.md). What these tests are about is the answer once it connects.
+ */
+async function chatWhenReachable(u, timeoutMs = 45000) {
+  const end = Date.now() + timeoutMs;
+  let r = chatFrom(u);
+  while (r.status === 0 && Date.now() < end) { await new Promise((res) => setTimeout(res, 1000)); r = chatFrom(u); }
+  return r;
+}
 const providerCalls = async () => (await fetch(`${fakeUrl}/__calls`)).json();
 const usageOf = async (u) => JSON.parse((await request('/gw/api/usage', { headers: { cookie: u.cookie } })).body);
 
@@ -218,15 +230,17 @@ test('usage and tokens survive an llm-proxy restart', async () => {
   docker('restart', PROXY);
   await waitFor(() => docker('inspect', '-f', '{{.State.Health.Status}}', PROXY) === 'healthy', { timeoutMs: 60000, what: 'proxy healthy' });
   assert.equal((await usageOf(users.a)).day.used, before);
-  assert.equal(chatFrom(users.a).status, 429, 'A is still blocked');
-  assert.equal(chatFrom(users.b).status, 200, 'B\'s token still valid');
+  const again = await chatWhenReachable(users.a);
+  assert.equal(again.status, 429, `A is still blocked: ${JSON.stringify(again)}`);
+  assert.equal((await chatWhenReachable(users.b)).status, 200, 'B\'s token still valid');
 });
 
 test('revoking a token cuts off model access; recreating the sandbox restores it with a new token and the same data', async () => {
   const b = users.b;
   docker('exec', b.container, 'sh', '-c', 'echo keep > /workspace/marker');
   const oldToken = docker('exec', b.container, 'printenv', 'LLM_PROXY_TOKEN');
-  const revoke = docker('exec', GATEWAY, 'node', '-e',
+  // As the gateway's own user: the process drops to `node`, and a plain exec is root without the capability to open a socket owned by node (SEC-10).
+  const revoke = docker('exec', '-u', 'node', GATEWAY, 'node', '-e',
     `require('http').request({ socketPath: process.env.LLM_ADMIN_SOCKET, path: '/admin/tokens/${b.id}', method: 'DELETE', headers: { authorization: 'Bearer ' + process.env.LLM_ADMIN_SECRET } }, (r) => { r.resume(); console.log(r.statusCode); }).end()`);
   assert.equal(revoke, '204');
   const calls = (await providerCalls()).length;
@@ -241,7 +255,7 @@ test('revoking a token cuts off model access; recreating the sandbox restores it
   const newToken = docker('exec', b.container, 'printenv', 'LLM_PROXY_TOKEN');
   assert.notEqual(newToken, oldToken);
   assert.equal(docker('exec', b.container, 'cat', '/workspace/marker'), 'keep');
-  assert.equal(chatFrom(b).status, 200);
+  assert.equal((await chatWhenReachable(b)).status, 200);
   assert.equal(fromSandbox(b.container, { token: oldToken, body: msg('x') }).status, 401, 'the old token stays dead');
 });
 

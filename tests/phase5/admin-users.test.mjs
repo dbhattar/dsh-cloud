@@ -29,7 +29,7 @@ const startedAt = (u) => tryDocker('inspect', '-f', '{{.State.StartedAt}}', u.co
 const tokenOf = (u) => tryDocker('inspect', '-f', '{{range .Config.Env}}{{println .}}{{end}}', u.container).split('\n').find((l) => l.startsWith('LLM_PROXY_TOKEN='))?.slice('LLM_PROXY_TOKEN='.length) ?? '';
 /** What the model proxy answers to this token (401 = revoked or unknown), asked from the gateway container, which can reach it. */
 const proxyStatus = (token) => Number(docker('exec', GATEWAY, 'node', '-e', `fetch('http://llm-proxy:8081/v1/chat/completions',{method:'POST',headers:{authorization:'Bearer '+process.argv[1],'content-type':'application/json'},body:JSON.stringify({model:'openrouter/free',messages:[{role:'user',content:'x'}]})}).then(r=>console.log(r.status))`, token));
-const audit = (u, event) => tryDocker('exec', GATEWAY, 'node', 'src/cli.js', 'audit', '--user', String(u.id), '--event', event, '--json');
+const audit = (u, event) => tryDocker('exec', '-u', 'node', GATEWAY, 'node', 'src/cli.js', 'audit', '--user', String(u.id), '--event', event, '--json');
 const JSON_HEADERS = { 'content-type': 'application/json' };
 const act = (u, action, body = {}) => request(`/gw/admin/api/users/${u.id}/${action}`, { method: 'POST', headers: { ...JSON_HEADERS, cookie: users.admin.cookie, 'x-csrf-token': csrf }, body: JSON.stringify(body) });
 const me = async (u) => (await request('/gw/api/me', { headers: { cookie: u.cookie } })).status;
@@ -42,7 +42,7 @@ before(async () => {
   users.admin = await signupUser('admin', run);
   users.target = await signupUser('target', run);
   users.other = await signupUser('other', run);
-  docker('exec', GATEWAY, 'node', 'src/cli.js', 'admin', 'grant', users.admin.email);
+  docker('exec', '-u', 'node', GATEWAY, 'node', 'src/cli.js', 'admin', 'grant', users.admin.email);
   const page = await request('/gw/admin', { headers: { cookie: users.admin.cookie, accept: 'text/html' } });
   csrf = JSON.parse(/<script id="gw-boot" type="application\/json">(.*?)<\/script>/s.exec(page.body)[1]).csrf;
   for (const u of [users.target, users.other]) {

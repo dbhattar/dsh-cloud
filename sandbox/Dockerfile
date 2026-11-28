@@ -3,6 +3,10 @@
 # which fills sandbox/.harness-dist/.
 FROM node:24.22.3-slim@sha256:dc26ae92c9fb15cf6b1d63e20f0944b2efe0f115b20e00be48fb23fceb061c54
 COPY .harness-dist/ /opt/dsh/
+# A release build (scripts/publish-images.sh, CI) sets REQUIRE_CLEAN_HARNESS=1 and fails here unless the harness came from a commit
+# (BUILD_INFO says dirty=no), so an image made from someone's working tree cannot be published by mistake (docs/security-review.md, SEC-12).
+ARG REQUIRE_CLEAN_HARNESS=0
+RUN [ "$REQUIRE_CLEAN_HARNESS" = 0 ] || grep -qx 'dirty=no' /opt/dsh/BUILD_INFO
 RUN test -f /opt/dsh/apps/cli/lib/bin.js \
  && ln -s /opt/dsh/apps/cli/lib/bin.js /usr/local/bin/dsh && chmod +x /opt/dsh/apps/cli/lib/bin.js
 

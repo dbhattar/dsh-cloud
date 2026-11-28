@@ -7,7 +7,7 @@
 #
 # What it does, in this order (--only and --skip take a comma-separated list of these names):
 #   preflight  check the OS, architecture, memory and disk, and that the Docker address pool does not collide with this host's own networks
-#   packages   ca-certificates curl gnupg ufw fail2ban unattended-upgrades jq openssl
+#   packages   ca-certificates curl gnupg ufw fail2ban unattended-upgrades jq openssl age
 #   docker     Docker Engine and the compose plugin from Docker's signed apt repository (key fingerprint checked)
 #   gvisor     gVisor (runsc) from gVisor's signed apt repository, registered as a Docker runtime
 #   daemon     /etc/docker/daemon.json merged with: bounded local logs, live-restore, a private address pool; refuses a daemon on TCP
@@ -171,7 +171,7 @@ phase_preflight() {
 phase_packages() {
   say "packages"
   run apt-get update -qq
-  apt_install ca-certificates curl gnupg ufw fail2ban unattended-upgrades jq openssl
+  apt_install ca-certificates curl gnupg ufw fail2ban unattended-upgrades jq openssl age
 }
 
 phase_docker() {

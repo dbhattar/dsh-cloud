@@ -22,7 +22,7 @@ x-hardening: &hardening
 services:
   sandbox-image:
     build: ../sandbox
-    image: dsh-sandbox:latest
+    image: ${SANDBOX_IMAGE:-dsh-sandbox:latest} # set to a registry reference by digest on a server (docs/deploy-images.md)
     entrypoint: ["true"] # build only; real sandboxes are created by sandbox-runner
     restart: "no"
   gateway:
@@ -37,6 +37,7 @@ services:
     logging: *logging
     mem_limit: 768m # several times what it uses idle (about 20 to 120 MB); a runaway or a flood cannot take the host's memory
     pids_limit: 512
+    image: ${GATEWAY_IMAGE:-dshcloud-gateway:latest}
     build:
       context: ../gateway
       additional_contexts:
@@ -125,6 +126,7 @@ services:
     logging: *logging
     mem_limit: 256m # several times what it uses idle (about 20 to 120 MB); a runaway or a flood cannot take the host's memory
     pids_limit: 512
+    image: ${RUNNER_IMAGE:-dshcloud-sandbox-runner:latest}
     build:
       context: ../runner
       additional_contexts:
@@ -135,7 +137,7 @@ services:
     environment:
       PUBLIC_URL: ${PUBLIC_URL:-https://localhost/} # the address people use, with https and a trailing slash; must match DOMAIN
       RUNNER_SECRET: ${RUNNER_SECRET:?set RUNNER_SECRET in .env (see .env.example)}
-      SANDBOX_IMAGE: dsh-sandbox:latest
+      SANDBOX_IMAGE: ${SANDBOX_IMAGE:-dsh-sandbox:latest}
       # OCI runtime for user sandboxes: gVisor (runsc). The runner REFUSES TO START with runc or an empty value unless
       # ALLOW_INSECURE_RUNTIME=true, because under runc a sandbox shares the host kernel (docs/security-review.md, SEC-05).
       SANDBOX_RUNTIME: ${SANDBOX_RUNTIME:-runsc}
@@ -163,6 +165,7 @@ services:
     logging: *logging
     mem_limit: 512m # several times what it uses idle (about 20 to 120 MB); a runaway or a flood cannot take the host's memory
     pids_limit: 512
+    image: ${LLM_PROXY_IMAGE:-dshcloud-llm-proxy:latest}
     build:
       context: ../llm-proxy
       additional_contexts:
@@ -194,6 +197,7 @@ services:
     logging: *logging
     mem_limit: 512m # several times what it uses idle (about 20 to 120 MB); a runaway or a flood cannot take the host's memory
     pids_limit: 512
+    image: ${EGRESS_PROXY_IMAGE:-dshcloud-egress-proxy:latest}
     build: ../egress-proxy
     labels:
       dsh-cloud.role: egress-proxy # sandbox-runner attaches it to every user network

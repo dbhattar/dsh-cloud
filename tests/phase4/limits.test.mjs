@@ -40,7 +40,7 @@ let owned = false;
 
 const docker = (...a) => sh('docker', a, { maxBuffer: 64 * 1024 * 1024 }).trim();
 const tryDocker = (...a) => { try { return docker(...a); } catch { return ''; } };
-const cli = (...a) => docker('exec', GATEWAY, 'node', 'src/cli.js', ...a);
+const cli = (...a) => docker('exec', '-u', 'node', GATEWAY, 'node', 'src/cli.js', ...a);
 const invite = () => cli('invite', 'create', '1');
 const cookieOf = (r) => String(r.headers['set-cookie'] ?? '').split(';')[0];
 
