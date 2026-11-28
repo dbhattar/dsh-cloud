@@ -218,7 +218,7 @@ export function Shell({ email, src, workspaceName = 'Workspace' }: { email: stri
         key={frameKey}
         className={styles.frame}
         src={src}
-        title="DeepSeek Harness"
+        title="Workspace"
         allow="clipboard-read; clipboard-write; fullscreen"
         ref={frameRef}
         onLoad={(e) => hook(e.currentTarget)}

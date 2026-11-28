@@ -17,7 +17,7 @@ const INVITE_MESSAGES = {
   expired: 'That invite code has expired. Ask for a new one.',
   revoked: 'That invite is no longer valid. Ask for a new one.',
 };
-const ASSET_TYPES = { '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.woff2': 'font/woff2', '.svg': 'image/svg+xml' };
+const ASSET_TYPES = { '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.woff2': 'font/woff2', '.svg': 'image/svg+xml', '.png': 'image/png' };
 
 export function createGateway({ cfg, store, manager, log = console.log, audit = new Audit({ store, log }) }) {
   // Admin-editable settings: the stored overrides are applied to cfg now, and again on every change (policy.js).
@@ -100,13 +100,13 @@ export function createGateway({ cfg, store, manager, log = console.log, audit = 
 
   async function handleGw(req, res, path) {
     if (path.startsWith('/gw/assets/') && (req.method === 'GET' || req.method === 'HEAD')) {
-      // Public on purpose: the login page needs them. Hashed filenames, flat directory, no traversal.
+      // Public on purpose: the login page needs them. Flat directory, no traversal. Build output has hashed names (cached for good); the icons do not (an hour).
       const name = path.slice('/gw/assets/'.length);
       const type = ASSET_TYPES[name.slice(name.lastIndexOf('.'))];
       if (!/^[\w.-]+$/.test(name) || name.includes('..') || !type) return send(res, 404, 'Not found', { 'content-type': 'text/plain' });
       try {
         const body = await readFile(new URL(name, WEB_DIST));
-        return send(res, 200, req.method === 'HEAD' ? '' : body, { 'content-type': type, 'cache-control': 'public, max-age=31536000, immutable' });
+        return send(res, 200, req.method === 'HEAD' ? '' : body, { 'content-type': type, 'cache-control': /-[\w]{8}\.\w+$/.test(name) ? 'public, max-age=31536000, immutable' : 'public, max-age=3600' });
       } catch {
         return send(res, 404, 'Not found', { 'content-type': 'text/plain' });
       }

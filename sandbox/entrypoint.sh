@@ -58,6 +58,16 @@ fi
   echo "- id: ui-schedule"
   echo "  disabled: true"
 } >> "$PATCH"
+# Branding: this service is not the official DeepSeek build, so the official sidebar whale and home whale are switched off.
+# Switching them off alone is not enough: the shell's fallback is the same whale artwork (docs/branding.md).
+{
+  echo "- id: ui-brand-official"
+  echo "  disabled: true"
+  # ...and dsh-cloud's own mark takes the sidebar and home-page seats the whale would have fallen back to (sandbox/brand).
+  echo "- insert:"
+  echo "    - id: dsh-cloud-brand"
+  echo "      name: /opt/dsh-brand/lib/index.js"
+} >> "$PATCH"
 # Model routing: the harness talks to llm-proxy (LLM_BASE_URL) with this user's token (LLM_PROXY_TOKEN).
 # The real provider key is never present in the sandbox.
 if [ -n "${LLM_PROXY_TOKEN:-}" ] && [ -n "${LLM_BASE_URL:-}" ]; then

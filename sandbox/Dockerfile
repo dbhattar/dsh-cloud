@@ -41,6 +41,9 @@ COPY --chmod=0755 bin/dsh-git /usr/local/bin/dsh-git
 # Methodology skills (docs/plan-first-security-test.md, step 5), read by the harness through DSH_BUNDLED_SKILL_DIR.
 COPY skills/ /opt/dsh-skills/
 
+# dsh-cloud's own mark in the harness UI (docs/branding.md): a browser-only plugin the host serves from here.
+COPY brand/ /opt/dsh-brand/
+
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN useradd --home-dir /workspace --no-create-home --shell /bin/bash dsh \
  && mkdir -p /data/dsh /workspace \

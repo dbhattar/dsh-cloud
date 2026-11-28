@@ -152,7 +152,7 @@ test('curation applies to the harness page on the frame\'s first load, not only 
     await context.addCookies([{ name: 'gw_session', value: store.createSession(uid, 600), url: base }]);
     const page = await context.newPage();
     await page.goto(`${base}/`);
-    const frame = page.frameLocator('iframe[title="DeepSeek Harness"]');
+    const frame = page.frameLocator('iframe[title="Workspace"]');
     await frame.getByText('Plugins').waitFor({ timeout: 15000 });
     await page.waitForTimeout(300);
     const text = await frame.locator('body').innerText();
