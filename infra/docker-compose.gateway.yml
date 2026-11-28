@@ -44,6 +44,18 @@ services:
       MAX_DISK_MB: ${MAX_DISK_MB:-2048} # per user, both volumes; 0 = unlimited
       DISK_CHECK_SECONDS: ${DISK_CHECK_SECONDS:-300}
       AUDIT_RETENTION_DAYS: ${AUDIT_RETENTION_DAYS:-90} # audit rows kept this long; 0 = forever
+      # Outgoing mail (docs/email.md): password reset, emailed invites, "your workspace finished". Off unless MAIL_PROVIDER is set.
+      MAIL_PROVIDER: ${MAIL_PROVIDER:-log}
+      MAIL_FROM: ${MAIL_FROM:-}
+      MAILGUN_API_KEY: ${MAILGUN_API_KEY:-}
+      MAILGUN_DOMAIN: ${MAILGUN_DOMAIN:-}
+      MAILGUN_REGION: ${MAILGUN_REGION:-us}
+      MAIL_OUTBOX_DIR: ${MAIL_OUTBOX_DIR:-}
+      MAIL_MAX_PER_ADDRESS_HOUR: ${MAIL_MAX_PER_ADDRESS_HOUR:-5}
+      MAIL_MAX_PER_HOUR: ${MAIL_MAX_PER_HOUR:-100}
+      MAIL_RESET_MINUTES: ${MAIL_RESET_MINUTES:-60}
+      MAIL_TASK_NOTICES: ${MAIL_TASK_NOTICES:-true}
+      MAIL_TASK_NOTICE_HOURS: ${MAIL_TASK_NOTICE_HOURS:-6}
       EVICT_AFTER_IDLE_SECONDS: ${EVICT_AFTER_IDLE_SECONDS:-300} # when full, sandboxes idle this long may be stopped for a newcomer
       LLM_ADMIN_SOCKET: /run/llm-admin/admin.sock
       LLM_ADMIN_SECRET: ${LLM_ADMIN_SECRET:?set LLM_ADMIN_SECRET in .env (see .env.example)}

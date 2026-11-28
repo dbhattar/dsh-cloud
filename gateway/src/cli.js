@@ -1,11 +1,17 @@
 // Operator commands, run inside the gateway container (see scripts/invite.sh):
-//   node src/cli.js invite create [count] [--note TEXT] [--days N] [--link]
+//   node src/cli.js invite create [count] [--note TEXT] [--days N] [--link] [--email ADDRESS]   (--email mails the one invite)
+//   node src/cli.js mail test ADDRESS   (sends one message through MAIL_PROVIDER; see scripts/mail-test.sh)
 //   node src/cli.js invite list | invite revoke ID
 //   node src/cli.js admin grant EMAIL | admin revoke EMAIL | admin list   (see scripts/make-admin.sh)
 //   node src/cli.js audit [--user ID] [--event NAME|PREFIX.] [--since 24h|7d] [--limit N] [--json]
 import { join } from 'node:path';
 import { parseSpan } from './audit.js';
+import { Audit } from './audit.js';
+import { normalizeEmail } from './auth.js';
+import { loadConfig } from './config.js';
 import { Store } from './db.js';
+import { createMailer } from './mail.js';
+import { createMailFlows } from './mail-flows.js';
 
 const [, , area, action, ...tail] = process.argv;
 // `audit` takes only flags, so its first flag lands in `action`: treat it as part of the arguments.
@@ -16,15 +22,43 @@ const flag = (name) => {
   return i >= 0 ? rest[i + 1] : undefined;
 };
 
+/** The mail settings the gateway itself runs with (the container's environment), and a way to wait for delivery. */
+function mailFor() {
+  const cfg = loadConfig(process.env);
+  const audit = new Audit({ store, log: () => {} }); // rows go to the database; the line on stdout would repeat what the command prints
+  const mailer = createMailer({ cfg, audit, log: (m) => console.error(m) });
+  return { mailer, flows: createMailFlows({ cfg, store, mailer, audit }), cfg };
+}
+
 if (area === 'invite' && action === 'create') {
+  const to = flag('--email') === undefined ? null : normalizeEmail(flag('--email'));
+  if (flag('--email') !== undefined && !to) (console.error('--email: that address does not look right'), process.exit(2));
+  if (to && Number.parseInt(rest.find((a) => /^\d+$/.test(a)) ?? '1', 10) !== 1) (console.error('--email mails one invite: leave out the count'), process.exit(2));
+  const mailing = to ? mailFor() : null;
+  if (mailing && !mailing.mailer.enabled) (console.error('mail is not set up (MAIL_PROVIDER=log): the invite would not be sent. See docs/email.md'), process.exit(1));
   const count = Math.min(100, Math.max(1, Number.parseInt(rest.find((a) => /^\d+$/.test(a)) ?? '1', 10)));
   // --link prints each code as a sign-up link (PUBLIC_URL is set in the gateway's environment) instead of the bare code.
   const base = rest.includes('--link') ? new URL('gw/signup', process.env.PUBLIC_URL || 'https://localhost/').href : null;
   for (let i = 0; i < count; i++) {
     const code = store.createInvite({ note: flag('--note') ?? '', ttlDays: Number.parseInt(flag('--days') ?? '0', 10) || 0 });
     console.log(base ? `${base}?invite=${encodeURIComponent(code)}` : code);
+    if (mailing) {
+      const r = mailing.flows.invite({ email: to, code, days: Number.parseInt(flag('--days') ?? '0', 10) || 0 });
+      await mailing.mailer.flush();
+      console.error(r.queued ? 'mailed (see: audit --event mail. for the outcome)' : `not mailed: ${r.reason}`);
+    }
   }
   store.addAudit({ event: 'admin.invite_create', detail: { count, note: flag('--note') ?? '', via: 'cli' } });
+} else if (area === 'mail' && action === 'test') {
+  const to = normalizeEmail(rest[0]);
+  if (!to) (console.error('usage: mail test ADDRESS'), process.exit(2));
+  const { mailer, flows, cfg } = mailFor();
+  if (!mailer.enabled) (console.error(`MAIL_PROVIDER is ${cfg.mail.provider}: nothing would be sent. Set MAIL_PROVIDER (docs/email.md)`), process.exit(1));
+  const r = flows.test(to);
+  await mailer.flush();
+  const last = store.queryAudit({ event: 'mail.', limit: 1 })[0];
+  console.log(r.queued ? `${last?.event ?? 'queued'} via ${cfg.mail.provider}${last?.detail?.reason ? `: ${last.detail.reason}` : ''}` : `not sent: ${r.reason}`);
+  process.exit(r.queued && last?.event === 'mail.sent' ? 0 : 1);
 } else if (area === 'invite' && action === 'list') {
   const when = (t) => (t ? new Date(t).toISOString().slice(0, 16).replace('T', ' ') : '-');
   for (const i of store.listInvites()) console.log(`${i.id}  ${i.status === 'used' ? `used by user ${i.usedBy} ${when(i.usedAt)}` : i.status === 'revoked' ? `revoked ${when(i.revokedAt)}` : i.status === 'expired' ? 'expired' : 'unused'}  created ${when(i.createdAt)}  expires ${when(i.expiresAt)}  ${i.note}`);
@@ -53,6 +87,6 @@ if (area === 'invite' && action === 'create') {
     else console.log(`${new Date(r.ts).toISOString().slice(0, 19).replace('T', ' ')}  ${r.event.padEnd(18)} user=${String(r.userId ?? '-').padEnd(4)} ip=${String(r.ip ?? '-').padEnd(15)} ${Object.keys(r.detail).length ? JSON.stringify(r.detail) : ''}`);
   }
 } else {
-  console.error('usage: cli.js admin grant EMAIL | admin revoke EMAIL | admin list | invite create [count] [--note TEXT] [--days N] [--link] | invite list | invite revoke ID | audit [--user ID] [--event NAME] [--since 24h] [--limit N] [--json]');
+  console.error('usage: cli.js admin grant EMAIL | admin revoke EMAIL | admin list | mail test ADDRESS | invite create [count] [--note TEXT] [--days N] [--link] [--email ADDRESS] | invite list | invite revoke ID | audit [--user ID] [--event NAME] [--since 24h] [--limit N] [--json]');
   process.exit(2);
 }

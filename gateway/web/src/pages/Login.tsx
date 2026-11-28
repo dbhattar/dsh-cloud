@@ -23,6 +23,9 @@ function PasswordField({ autoComplete, hint, minLength }: { autoComplete: string
 
 interface Props {
   error?: string | undefined;
+  notice?: string | undefined;
+  canReset?: boolean | undefined;
+  canJoinWaitlist?: boolean | undefined;
   allowSignup: boolean;
   inviteRequired?: boolean | undefined;
   invite?: { code: string; status: 'valid' | 'used' | 'expired' | 'revoked' | 'unknown' } | null | undefined;
@@ -31,7 +34,7 @@ interface Props {
   mode?: 'login' | 'signup' | undefined;
 }
 
-export function Login({ error, allowSignup, inviteRequired = false, invite = null, next = null, email = null, mode = 'login' }: Props) {
+export function Login({ error, notice, canReset = false, canJoinWaitlist = false, allowSignup, inviteRequired = false, invite = null, next = null, email = null, mode = 'login' }: Props) {
   const signInForm = (
     <form key="signin" className={styles.form} method="post" action="/gw/login" aria-label="Sign in">
       {mode === 'signup' && <h2 className={styles.heading}>Already have an account?</h2>}
@@ -39,6 +42,7 @@ export function Login({ error, allowSignup, inviteRequired = false, invite = nul
       <Field label="Email"><input className={inputClass} name="email" type="email" autoComplete="username" defaultValue={mode === 'login' ? email ?? '' : ''} autoFocus={mode === 'login'} required /></Field>
       <PasswordField autoComplete="current-password" />
       <Button variant={mode === 'signup' ? 'outline' : 'primary'}>Sign in</Button>
+      {canReset && <p className={styles.hint}><a href="/gw/forgot">Forgot your password?</a></p>}
     </form>
   );
   const signUpForm = allowSignup && (
@@ -52,10 +56,12 @@ export function Login({ error, allowSignup, inviteRequired = false, invite = nul
         <Field label="Invite code"><input className={inputClass} name="invite" type="text" autoComplete="off" spellCheck={false} defaultValue={invite?.code ?? ''} required /></Field>
       )}
       <Button variant={mode === 'signup' ? 'primary' : 'outline'}>Create account</Button>
+      {inviteRequired && canJoinWaitlist && <p className={styles.hint}>No invite? <a href="/gw/waitlist">Join the waitlist</a></p>}
     </form>
   );
   return (
     <Card title={mode === 'signup' ? 'Create your account' : 'Sign in'}>
+      {notice && <p className={styles.good} role="status">{notice}</p>}
       {error && <ErrorNote>{error}</ErrorNote>}
       {mode === 'signup' ? <>{signUpForm}<div className={styles.divider}>{signInForm}</div></> : <>{signInForm}{signUpForm}</>}
     </Card>

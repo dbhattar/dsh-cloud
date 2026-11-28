@@ -31,6 +31,7 @@ export function adminRoutes({ store, overview = async () => ({}), users = null, 
     page('/gw/admin/users'),
     page('/gw/admin/users/:id'),
     page('/gw/admin/invites'),
+    page('/gw/admin/waitlist'),
     page('/gw/admin/feedback'),
     page('/gw/admin/audit'),
     page('/gw/admin/policies'),
@@ -81,6 +82,9 @@ export function adminRoutes({ store, overview = async () => ({}), users = null, 
       { method: 'GET', path: '/gw/admin/api/invites', handle: () => ({ json: records.invites.list() }) },
       { method: 'POST', path: '/gw/admin/api/invites', handle: async ({ admin, body, ip }) => records.invites.create({ ...(await body()), admin, ip }) },
       { method: 'POST', path: '/gw/admin/api/invites/:ref/revoke', handle: ({ params, admin, ip }) => records.invites.revoke({ ref: params.ref, admin, ip }) },
+      { method: 'GET', path: '/gw/admin/api/waitlist', handle: () => ({ json: records.waitlist.list() }) },
+      { method: 'POST', path: '/gw/admin/api/waitlist/invite', handle: async ({ admin, body, ip }) => records.waitlist.invite({ ...(await body()), admin, ip }) },
+      { method: 'POST', path: '/gw/admin/api/waitlist/remove', handle: async ({ admin, body, ip }) => records.waitlist.remove({ ...(await body()), admin, ip }) },
       { method: 'GET', path: '/gw/admin/api/feedback', handle: ({ query }) => ({ json: records.feedback.list({ status: query.get('status'), page: query.get('page') }) }) },
       { method: 'POST', path: '/gw/admin/api/feedback/:id/read', handle: async ({ params, admin, body, ip }) => records.feedback.mark({ id: params.id, read: (await body()).read, admin, ip }) },
       { method: 'GET', path: '/gw/admin/api/audit/search', handle: ({ query }) => records.audit.search(query) },
@@ -104,9 +108,9 @@ const paramNames = (route) => [...route.path.matchAll(/:(id|ref|key)/g)].map((m)
  * existence is not confirmed to ordinary users, and the attempt is audited. For an admin, a state-changing request without the
  * page's CSRF token is refused (and audited).
  */
-export function createAdminHandler({ store, cfg, manager, audit, policies, userOf, clientIp, send, json, sessionToken, readJson, log = () => {} }) {
+export function createAdminHandler({ store, cfg, manager, audit, policies, mail = null, userOf, clientIp, send, json, sessionToken, readJson, log = () => {} }) {
   const users = createUsersApi({ store, manager, audit, log });
-  const records = createRecordsApi({ store, cfg, audit });
+  const records = createRecordsApi({ store, cfg, audit, mail });
   const policyApi = createPoliciesApi({ store, manager, audit, policies, log });
   const routes = adminRoutes({ store, overview: createOverview({ store, manager, cfg }), users, records, policies: policyApi }).map((r) => ({ ...r, re: matcher(r), names: paramNames(r) }));
   const secret = randomBytes(32); // per process: a restart makes open admin pages reload once to get a new token

@@ -79,6 +79,6 @@ export function safeNext(value) {
   // eslint-disable-next-line no-control-regex
   if (/[\\\u0000-\u001f\u007f]/.test(value)) return null;
   const path = value.split(/[?#]/)[0];
-  if (path === '/gw/login' || path === '/gw/signup' || path === '/gw/logout') return null;
+  if (['/gw/login', '/gw/signup', '/gw/logout', '/gw/forgot', '/gw/reset', '/gw/mail/stop', '/gw/waitlist', '/gw/waitlist/confirm'].includes(path)) return null;
   return value;
 }
