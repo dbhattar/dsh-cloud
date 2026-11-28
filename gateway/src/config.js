@@ -57,6 +57,11 @@ export function loadConfig(env = process.env) {
     crashMaxRestarts: int('CRASH_MAX_RESTARTS', 3),
     crashWindowSeconds: int('CRASH_WINDOW_SECONDS', 600),
     sessionTtlSeconds: int('SESSION_TTL_SECONDS', 7 * 24 * 3600),
+    // Sign-in failures allowed per address across all emails (15 minutes) and per email across all addresses (an hour); see SEC-06.
+    loginMaxPerIp: int('LOGIN_MAX_PER_IP', 60),
+    loginMaxPerEmail: int('LOGIN_MAX_PER_EMAIL', 50),
+    // Where the gateway listens. A unix socket path (shared with Caddy only) means no TCP port at all: no sandbox can reach it (SEC-04).
+    socketPath: env.GATEWAY_SOCKET || '',
   };
 }
 

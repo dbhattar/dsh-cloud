@@ -379,6 +379,10 @@ export class Store {
   markWaitlistInvited(email, now = Date.now()) {
     return this.db.prepare('UPDATE waitlist SET invited_at = ? WHERE email = ?').run(now, email).changes > 0;
   }
+  /** Entries that never confirmed their address and are older than `before`: so unconfirmed requests cannot hold the list's places for ever. */
+  purgeUnconfirmedWaitlist(before) {
+    return this.db.prepare('DELETE FROM waitlist WHERE confirmed_at IS NULL AND created_at < ?').run(before).changes;
+  }
   removeFromWaitlist(email) {
     return this.db.prepare('DELETE FROM waitlist WHERE email = ?').run(email).changes > 0;
   }

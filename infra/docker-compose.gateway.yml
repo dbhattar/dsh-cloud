@@ -23,12 +23,14 @@ services:
     labels:
       dsh-cloud.role: gateway # sandbox-runner attaches it to every user network
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/gw/healthz').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+      test: ["CMD", "node", "-e", "require('http').get({ socketPath: process.env.GATEWAY_SOCKET, path: '/gw/healthz' }, (r) => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
       interval: 10s
       timeout: 3s
       retries: 5
       start_period: 10s
     environment:
+      # No TCP port: the gateway listens on a unix socket that only Caddy shares, so a sandbox cannot reach it (SEC-04).
+      GATEWAY_SOCKET: /run/gw/gateway.sock
       PUBLIC_URL: https://localhost/
       RUNNER_URL: http://sandbox-runner:8090
       RUNNER_SECRET: ${RUNNER_SECRET:?set RUNNER_SECRET in .env (see .env.example)}
@@ -74,6 +76,7 @@ services:
     volumes:
       - gateway-data:/data
       - llm-admin:/run/llm-admin # admin socket of llm-proxy; mounted by nothing else
+      - gateway-socket:/run/gw # the gateway's own socket; mounted by Caddy and nothing else
     expose:
       - "8080"
   # The only holder of the Docker socket. Builds every sandbox container spec itself from a user id
@@ -156,6 +159,7 @@ services:
     volumes:
       - ./Caddyfile.gateway:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
+      - gateway-socket:/run/gw # the only way to the gateway: no sandbox shares this volume
     depends_on:
       - gateway
 networks:
@@ -167,4 +171,5 @@ volumes:
   gateway-data:
   llm-proxy-data:
   llm-admin:
+  gateway-socket:
   caddy-data:

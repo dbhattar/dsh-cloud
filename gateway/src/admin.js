@@ -125,7 +125,7 @@ export function createAdminHandler({ store, cfg, manager, audit, policies, mail 
       return json(res, 401, { error: 'unauthenticated' });
     }
     if (!user.isAdmin) {
-      audit.record('admin.denied', { userId: user.id, ip: clientIp(req), path });
+      audit.record('admin.denied', { userId: user.id, ip: clientIp(req), path: String(path).slice(0, 120) }); // the path is the caller's own text: bounded
       return send(res, 404, 'Not found', { 'content-type': 'text/plain' });
     }
     if (!route) return json(res, 404, { error: 'not found' });
@@ -134,7 +134,7 @@ export function createAdminHandler({ store, cfg, manager, audit, policies, mail 
       const given = String(req.headers['x-csrf-token'] ?? '');
       const ok = given.length === csrf.length && timingSafeEqual(Buffer.from(given), Buffer.from(csrf));
       if (!ok) {
-        audit.record('admin.denied', { userId: user.id, ip: clientIp(req), path, reason: 'csrf' });
+        audit.record('admin.denied', { userId: user.id, ip: clientIp(req), path: String(path).slice(0, 120), reason: 'csrf' });
         return json(res, 403, { error: 'csrf', message: 'This page is out of date. Reload it and try again.' });
       }
     }

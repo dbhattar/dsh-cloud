@@ -14,6 +14,6 @@ COPY src ./src
 COPY --from=web /web/dist ./web/dist
 # Runs as root only to use the mounted Docker socket (prototype; see infra/README.md).
 # Admin socket directory of llm-proxy (volume shared with it); owned by node so either image can initialise it.
-RUN mkdir /run/llm-admin && chown node:node /run/llm-admin
+RUN mkdir /run/llm-admin /run/gw && chown node:node /run/llm-admin /run/gw
 ENV NODE_NO_WARNINGS=1
 CMD ["node", "src/index.js"]

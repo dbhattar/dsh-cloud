@@ -5,7 +5,7 @@ import { createPolicies } from './policy.js';
 import { Audit } from './audit.js';
 import { createMailer } from './mail.js';
 import { createMailFlows } from './mail-flows.js';
-import { MIN_PASSWORD, RateLimiter, hashPassword, normalizeEmail, parseCookies, safeNext, verifyPassword } from './auth.js';
+import { BusyError, MIN_PASSWORD, RateLimiter, hashPasswordAsync, normalizeEmail, parseCookies, safeNext, verifyPasswordAsync } from './auth.js';
 import { FEEDBACK_KINDS, WEB_DIST, appShellPage, feedbackPage, forgotPage, launchingPage, loginPage, noticePage, resetPage, waitlistPage } from './pages.js';
 import { proxyHttp, proxyUpgrade } from './proxy.js';
 import { usageProblem } from './states.js';
@@ -26,15 +26,27 @@ export function createGateway({ cfg, store, manager, log = console.log, audit = 
   // Admin-editable settings: the stored overrides are applied to cfg now, and again on every change (policy.js).
   const policies = createPolicies({ cfg, store, log });
   policies.load();
-  const loginLimiter = new RateLimiter(10, 15 * 60 * 1000);
+  const loginLimiter = new RateLimiter(10, 15 * 60 * 1000); // failures per address AND email: one person mistyping
+  // The two below do not depend on the other half of that key, so changing the email (to dodge the first) or the address does not help
+  // an attacker: failures from one address across all emails, and failures against one email from all addresses (SEC-06).
+  const loginIpLimiter = new RateLimiter(cfg.loginMaxPerIp ?? 60, 15 * 60 * 1000);
+  const loginEmailLimiter = new RateLimiter(cfg.loginMaxPerEmail ?? 30, 60 * 60 * 1000);
   const feedbackLimiter = new RateLimiter(10, 60 * 60 * 1000);
   const signupLimiter = new RateLimiter(10, 60 * 60 * 1000);
   const inviteLookupLimiter = new RateLimiter(30, 60 * 60 * 1000); // checks of an invite link, per address
   const forgotLimiter = new RateLimiter(5, 60 * 60 * 1000); // reset requests, per address of the caller (every request counts)
   const waitlistLimiter = new RateLimiter(5, 60 * 60 * 1000); // waitlist sign-ups, per address of the caller (every request counts)
   const resetLimiter = new RateLimiter(20, 60 * 60 * 1000); // looks at and uses of a reset link, per address of the caller
+  // Each limiter only ever forgot a key when that same key was asked about again, so keys minted by a caller (an email per request)
+  // stayed for ever. A timer sweeps them (and each limiter caps its own size).
+  const limiters = [loginLimiter, loginIpLimiter, loginEmailLimiter, feedbackLimiter, signupLimiter, inviteLookupLimiter, forgotLimiter, waitlistLimiter, resetLimiter];
+  const sweeper = setInterval(() => limiters.forEach((l) => l.sweep()), 5 * 60 * 1000);
+  sweeper.unref();
 
-  const clientIp = (req) => (req.headers['x-forwarded-for'] ?? '').split(',')[0].trim() || req.socket.remoteAddress;
+  // Behind Caddy, the only peer that can connect (SEC-04: the gateway listens on a unix socket shared with Caddy, never on a port a
+  // sandbox can reach), the first entry is the address Caddy saw. Without the socket (development, tests) the socket's own address
+  // is the fallback, or "local" for a unix socket, which has none.
+  const clientIp = (req) => (req.headers['x-forwarded-for'] ?? '').split(',')[0].trim() || req.socket.remoteAddress || 'local';
   const userOf = (req) => store.userBySession(parseCookies(req.headers.cookie)[COOKIE]);
   const sameOrigin = (req) => {
     const o = req.headers.origin;
@@ -150,17 +162,31 @@ export function createGateway({ cfg, store, manager, log = console.log, audit = 
       const form = await readForm(req);
       const email = normalizeEmail(form.email);
       const next = safeNext(form.next);
-      const key = `${clientIp(req)}|${email}`;
+      const ip = clientIp(req);
+      const key = `${ip}|${email}`;
       const again = (error) => loginPage({ ...loginOptions, error, next, email: String(form.email ?? '').slice(0, 254) });
-      if (loginLimiter.blocked(key)) {
-        audit.record('login.fail', { ip: clientIp(req), reason: 'rate_limited', email });
+      // Refused before any hashing. Which limit applied is recorded, once per window and key: a flood of refusals used to write one
+      // audit row (and one log line) each.
+      const limit = loginLimiter.blocked(key) ? [loginLimiter, key, 'address_and_email']
+        : loginIpLimiter.blocked(ip) ? [loginIpLimiter, ip, 'address']
+          : email && loginEmailLimiter.blocked(email) ? [loginEmailLimiter, email, 'email'] : null;
+      if (limit) {
+        if (limit[0].firstBlock(limit[1])) audit.record('login.fail', { ip, reason: 'rate_limited', limit: limit[2] });
         return send(res, 429, again('Too many attempts. Try again later.'));
       }
       const user = email ? store.userByEmail(email) : null;
-      const ok = verifyPassword(String(form.password ?? ''), user?.pw_hash);
+      let ok;
+      try {
+        ok = await verifyPasswordAsync(String(form.password ?? '').slice(0, 1000), user?.pw_hash);
+      } catch (e) {
+        if (!(e instanceof BusyError)) throw e;
+        return send(res, 503, again('The service is busy right now. Try again in a moment.'), { 'retry-after': '2' });
+      }
       if (!user || !ok) {
         loginLimiter.fail(key);
-        audit.record('login.fail', { userId: user?.id ?? null, ip: clientIp(req), reason: 'bad_credentials', email });
+        loginIpLimiter.fail(ip);
+        if (email) loginEmailLimiter.fail(email);
+        audit.record('login.fail', { userId: user?.id ?? null, ip, reason: 'bad_credentials', email });
         return send(res, 401, again('Invalid email or password.'));
       }
       // Said only after the right password, so it does not confirm that an address has an account.
@@ -180,13 +206,16 @@ export function createGateway({ cfg, store, manager, log = console.log, audit = 
       const password = String(form.password ?? '');
       const invite = String(form.invite ?? '').trim();
       const next = safeNext(form.next);
-      // The page shown after a failure keeps what was typed (not the password), and the invite as it was entered.
-      const page = (error) =>
-        loginPage({ ...loginOptions, error, next, email: String(form.email ?? '').slice(0, 254), mode: 'signup', invite: invite ? { code: invite.slice(0, 100), status: store.inviteStatus(invite) } : null });
+      // The page shown after a failure keeps what was typed (not the password), and the invite as it was entered. Its invite status is a
+      // lookup of the code, so it is only asked for after the attempt has been counted (below): an answer given before the limiter saw
+      // the request let anyone probe invite codes through the error pages without limit.
+      const page = (error, { probe = true } = {}) =>
+        loginPage({ ...loginOptions, error, next, email: String(form.email ?? '').slice(0, 254), mode: 'signup', invite: invite ? { code: invite.slice(0, 100), status: probe ? store.inviteStatus(invite) : 'unknown' } : null });
       if (signupLimiter.blocked(ip)) {
-        audit.record('signup.fail', { ip, reason: 'rate_limited' });
-        return send(res, 429, page('Too many sign-ups.'));
+        if (signupLimiter.firstBlock(ip)) audit.record('signup.fail', { ip, reason: 'rate_limited' });
+        return send(res, 429, page('Too many sign-ups.', { probe: false }));
       }
+      signupLimiter.fail(ip); // every attempt counts, whatever it is about
       const fail = (msg, reason) => {
         audit.record('signup.fail', { ip, reason, email });
         return send(res, 400, page(msg));
@@ -195,13 +224,19 @@ export function createGateway({ cfg, store, manager, log = console.log, audit = 
       if (password.length < MIN_PASSWORD || password.length > 200) {
         return fail(`Password must be ${MIN_PASSWORD}-200 characters.`, 'weak_password');
       }
-      signupLimiter.fail(ip); // every attempt counts, so invite codes cannot be guessed quickly
       if (!cfg.allowSignup) {
         const status = invite ? store.inviteStatus(invite) : 'missing';
         if (status !== 'valid') return fail(INVITE_MESSAGES[status], status === 'unknown' ? 'invite_invalid' : `invite_${status}`);
       }
       if (store.userByEmail(email)) return fail('Could not create that account.', 'email_taken');
-      const id = cfg.allowSignup ? store.createUser(email, hashPassword(password)) : store.createUserWithInvite(email, hashPassword(password), invite);
+      let pwHash;
+      try {
+        pwHash = await hashPasswordAsync(password);
+      } catch (e) {
+        if (!(e instanceof BusyError)) throw e;
+        return send(res, 503, page('The service is busy right now. Try again in a moment.'), { 'retry-after': '2' });
+      }
+      const id = cfg.allowSignup ? store.createUser(email, pwHash) : store.createUserWithInvite(email, pwHash, invite);
       if (id === null) return fail(INVITE_MESSAGES.used, 'invite_used'); // spent by someone else between the check and now
       store.removeFromWaitlist(email);
       audit.record('signup.ok', { userId: id, ip, viaInvite: !cfg.allowSignup });
@@ -221,7 +256,7 @@ export function createGateway({ cfg, store, manager, log = console.log, audit = 
       const ip = clientIp(req);
       const form = await readForm(req);
       if (waitlistLimiter.blocked(ip)) {
-        audit.record('waitlist.join', { ip, reason: 'rate_limited' });
+        if (waitlistLimiter.firstBlock(ip)) audit.record('waitlist.join', { ip, reason: 'rate_limited' });
         return send(res, 429, waitlistPage({ error: 'Too many requests. Try again later.' }));
       }
       waitlistLimiter.fail(ip);
@@ -251,7 +286,7 @@ export function createGateway({ cfg, store, manager, log = console.log, audit = 
       const form = await readForm(req);
       if (!mailer.enabled) return send(res, 200, forgotPage({ available: false }));
       if (forgotLimiter.blocked(ip)) {
-        audit.record('password.reset_request', { ip, reason: 'rate_limited' });
+        if (forgotLimiter.firstBlock(ip)) audit.record('password.reset_request', { ip, reason: 'rate_limited' });
         return send(res, 429, forgotPage({ error: 'Too many requests. Try again later.' }));
       }
       forgotLimiter.fail(ip);
@@ -281,9 +316,17 @@ export function createGateway({ cfg, store, manager, log = console.log, audit = 
       // Checked before the token is used up, so a typo does not cost the link.
       if (password.length < MIN_PASSWORD || password.length > 200) return send(res, 400, resetPage({ token, status, error: `Password must be ${MIN_PASSWORD}-200 characters.` }), noReferrer);
       if (password !== String(form.confirm ?? '')) return send(res, 400, resetPage({ token, status, error: 'The two passwords are not the same.' }), noReferrer);
+      // Hashed before the link is used up: a refusal because the service is busy must not cost the person their link.
+      let pwHash;
+      try {
+        pwHash = await hashPasswordAsync(password);
+      } catch (e) {
+        if (!(e instanceof BusyError)) throw e;
+        return send(res, 503, resetPage({ token, status, error: 'The service is busy right now. Try again in a moment.' }), { ...noReferrer, 'retry-after': '2' });
+      }
       const userId = store.consumeResetToken(token);
       if (userId === null) return send(res, 400, resetPage({ token, status: 'used' }), noReferrer); // used by another request just now
-      store.setPassword(userId, hashPassword(password)); // also ends every session of the account
+      store.setPassword(userId, pwHash); // also ends every session of the account
       audit.record('password.reset', { userId, ip });
       mail.passwordChanged(userId);
       return send(res, 303, '', { location: '/gw/login?reset=1', ...noReferrer });

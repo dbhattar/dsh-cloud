@@ -1,4 +1,4 @@
 localhost {
 	tls internal
-	reverse_proxy gateway:8080
+	reverse_proxy unix//run/gw/gateway.sock
 }
