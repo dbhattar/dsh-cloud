@@ -1,0 +1,171 @@
+# Security review before a public deployment
+
+Written 2026-11-28, at commit `0d99e90`. Related: [plan.md](plan.md), [plan-phase-4.md](plan-phase-4.md) (the earlier hardening), [finding-egress-proxy-crash.md](finding-egress-proxy-crash.md), [email.md](email.md), [backup.md](backup.md).
+
+## Why, and how it was done
+
+Many features were added one at a time (phases 1 to 6, email, waitlist, waiting room, branding) without one review of the whole. The next step is a deployment pipeline to a public VPS, so this review assumes a hostile internet: anonymous visitors, malicious signed-in users, and a prompt-injected agent with arbitrary code execution inside its own sandbox.
+
+- **Four independent read-only reviews** of the code, each by a separate reviewer with the same threat model: (1) the gateway and its web pages, (2) the runner and the sandbox image, (3) the llm-proxy and the egress proxy, (4) infrastructure, scripts, CI and git history. Nothing was changed by them.
+- **My own checks:** `npm audit` of every package, a search of the whole git history for secrets, and checking each reviewer's main claims against the code.
+- **Reproductions:** where a claim was a crash, I ran it (below), because reviewers state things with more confidence than they have.
+
+**Status labels used below.** *Reproduced*: I ran it and saw it happen. *Confirmed in code*: I read the exact lines and the claim holds; I did not run it. *Reported*: a reviewer's claim that I did not verify; treat as a lead.
+
+## Summary
+
+| Priority | Meaning | Count |
+| --- | --- | --- |
+| **P0** | A single request or a trivial action by any user breaks or bypasses something for everyone. Fix before any public exposure. | 6 |
+| **P1** | Serious for a public host, or blocks the pipeline. Fix before opening sign-ups. | 10 |
+| **P2** | Real but bounded. Schedule. | 4 groups |
+
+**What is sound** (details at the end): no committed secrets in the whole history; the four services have **no npm dependencies** and the web build has none vulnerable; password hashing, sessions, CSRF on the admin API, reset and invite tokens, SQL parameterisation, redirect and static-file handling, the runner's inability to be steered into a privileged container, the llm-proxy's token handling and its admin socket, and the egress proxy's address filter and scope matching all held up under review.
+
+**The pattern behind most P0 items:** the services are Node processes that exit on any unhandled error, nothing restarts them, and every sandbox can reach them. One bad request from one sandbox takes the service down for all users.
+
+## P0: fix before any public exposure
+
+### SEC-01. One malformed request kills the gateway or the llm-proxy (**Reproduced**)
+
+- **Where:** `gateway/src/server.js:385` (`async function handle`: `const path = new URL(req.url, 'http://x').pathname;` runs *before* the `try`), `llm-proxy/src/server.js:114, 278, 298`, `runner/src/server.js:138` (same pattern; not reproduced there), `gateway/src/server.js:123, 309, 370`, `gateway/src/admin.js:146` (parse inside handlers, partly guarded).
+- **Reproduction (2026-11-28, local, no Docker):** the gateway and the llm-proxy were each started in a scratch script and sent the request line `GET //[ HTTP/1.1`. Both processes **exited** with an unhandled `ERR_INVALID_URL` from the `new URL(...)` call. A request to `/healthz` before it was answered normally.
+- **Attack:** any sandbox can connect to `gateway:8080` and `llm-proxy:8081` directly (SEC-04) and send that line. Behind Caddy the gateway is probably protected (Go's HTTP server is expected to reject such a target; **not checked**), but the sandbox path does not go through Caddy. Nothing restarts either service (SEC-03), so all users lose the service until someone restarts the stack.
+- **Fix:** parse the URL inside the `try` (or with a wrapper that answers 400), in every service; add a process-level guard (SEC-03); add the request line as a test for each service (the proxies' abuse tests had no such case, the same gap as in [finding-egress-proxy-crash.md](finding-egress-proxy-crash.md)).
+
+### SEC-02. A web server can crash the egress proxy by answering with an odd status code (**Reproduced**)
+
+- **Where:** `egress-proxy/src/server.js:81-86`: `res.writeHead(r.statusCode, rh)` inside the upstream response callback, with no `try`.
+- **Reproduction:** a raw TCP server answering `HTTP/1.1 099 nope` was reached through the egress proxy (address filter switched off for the loopback test, as the existing unit tests do). The proxy process **exited** with `ERR_HTTP_INVALID_STATUS_CODE`.
+- **Attack:** a user hosts a public server that answers a status below 100, and requests it through the proxy. In open mode any host works; in scoped mode any allowed host where users can publish content works. Everyone's web access stops until restart. Same class as the reset bug already fixed.
+- **Fix:** wrap the callback body in `try`/`catch`; answer 502 and destroy the upstream request when the status is outside 100 to 599; add a test that serves such a status.
+
+### SEC-03. No guard against a single unhandled error, and nothing restarts a stopped service (**Confirmed in code**)
+
+- **Where:** `infra/docker-compose.gateway.yml` has no `restart:` on gateway, runner, llm-proxy, egress-proxy or Caddy (the one `restart: "no"` is the build-only image); no `process.on('uncaughtException' | 'unhandledRejection')` anywhere in `gateway/`, `runner/`, `llm-proxy/`, `egress-proxy/`.
+- **A second instance of the same bug:** `gateway/src/server.js` `handleUpgrade` awaits `manager.ensure(user.id)` **before** `proxyUpgrade` attaches `socket.on('error', ...)` (`gateway/src/proxy.js:58-59`). A signed-in user opens a WebSocket while their sandbox is stopped or queued (the wait can be 90 s start time plus up to 600 s in the waiting room), then resets the connection: the socket emits `error` with no listener and the gateway exits. Reachable through Caddy. (Code path confirmed; the crash itself was not reproduced.)
+- **Fix:** attach `socket.on('error', ...)` first thing in `handleUpgrade`; add a last-resort handler that logs and exits non-zero (so the container restarts rather than limping); `restart: unless-stopped` on every service; a gateway healthcheck. This also completes the follow-ups listed at the end of the egress-crash finding.
+
+### SEC-04. Sandboxes can talk to the gateway directly, so a user can forge their IP and reach every route (**Confirmed in code**)
+
+- **Where:** `infra/docker-compose.gateway.yml:87` (`SHARED_ROLES: gateway,llm-proxy,egress-proxy`), `runner/src/network.js` (`attachShared`): the gateway is attached to every user network. `gateway/src/server.js:37`: `const clientIp = (req) => (req.headers['x-forwarded-for'] ?? '').split(',')[0].trim() || req.socket.remoteAddress;`.
+- **Attack:** from inside a sandbox, `curl http://gateway:8080/gw/login -H 'X-Forwarded-For: <anything>'`. Every limiter is keyed on that value (login `ip|email`, signup, invite lookup, forgot, reset, waitlist), so password guessing and invite probing are unlimited, mail can be triggered without limit, and the audit trail can be filled with chosen addresses (framing someone, or hiding oneself). It also exposes every gateway route, including `/gw/admin/*`, to every sandbox without Caddy in between (still behind authentication).
+- **Behind Caddy the value is correct** (Caddy replaces the header when no `trusted_proxies` is set), which is why this was invisible in testing.
+- **Fix, in order of strength:** (a) do not attach the gateway to user networks; serve the narrow things sandboxes need (if any) on a second listener; (b) trust `X-Forwarded-For` only when the peer is Caddy's address (a configured `TRUSTED_PROXY`), else use the socket address; (c) keep per-account counters so a changing IP is not enough. Check what, if anything, the sandbox needs from the gateway before cutting it (the harness reaches the gateway only through the browser, as far as the code shows).
+
+### SEC-05. gVisor is optional and the system fails open to plain `runc` (**Confirmed in code**)
+
+- **Where:** `runner/src/config.js:15` (`const runtime = env.SANDBOX_RUNTIME ?? 'runc'`), `infra/docker-compose.gateway.yml:84` (`${SANDBOX_RUNTIME:-runc}`), `scripts/restart.sh` (picks `runc` when `runsc` is not registered, with only a warning).
+- **Why it matters:** the whole isolation story (docs/plan-phase-4.md) assumes gVisor. On a VPS without it, or with the variable unset or empty, sandboxes share the host kernel. Under `runc` the harness refuses to run shell commands (bubblewrap needs gVisor here), so the visible symptom is a broken tool, and the "fix" an operator reaches for is to loosen something.
+- **Fix:** production must refuse to start a sandbox unless the runtime is `runsc` and the daemon lists it (`GET /info` `Runtimes`); a `REQUIRE_GVISOR` default of true that development turns off; verify `HostConfig.Runtime` after create; no `:-runc` default in the production compose file. Test `runsc` on the actual VPS plan before choosing it (some virtualisation types cannot run it).
+
+### SEC-06. Unauthenticated callers can stall the gateway with logins (**Confirmed in code**)
+
+- **Where:** `gateway/src/auth.js:13, 24` (`scryptSync` on the main thread), `gateway/src/server.js:153` (the login limiter is keyed on `ip|email`).
+- **Attack:** an anonymous client posts logins with a new email each time: every key is fresh, none is limited, and each costs tens of milliseconds of the single thread. A few requests per second keep the event loop busy and stall every user's traffic, WebSocket handshakes and the admin panel. The same pattern allows password spraying (10 tries per email per 15 minutes, across all emails). The scrypt time was not measured.
+- **Fix:** async `crypto.scrypt` with a small concurrency limit and a bounded queue (503 when full); a per-IP limiter that ignores the email; a per-account failure counter; a global rate limit in Caddy. Only after hashing is off the main thread, raise the work factor.
+
+## P1: before opening sign-ups
+
+### SEC-07. No log limits and no limits or health checks on the services themselves (**Confirmed in code**)
+Docker's default `json-file` logs are unrotated: the egress proxy logs every refusal, the gateway every audit line, and sandbox logs contain the launch URL with `?token=`. A sandbox can also write endlessly to its own container's output (`yes > /proc/1/fd/1`; **reported**, not tried), and the sandbox spec has no `LogConfig` (`runner/src/spec.js`). A full host disk stops SQLite writes for everyone. Services have no memory or pids limits (only sandboxes do). **Fix:** `LogConfig: { Type: 'local', Config: { 'max-size': '10m', 'max-file': '3' } }` on sandboxes, a `logging:` block on every service, `mem_limit` and `pids_limit` on services, and `log-opts` in the VPS's `daemon.json`.
+
+### SEC-08. The disk quota is polling-only and fails open (**Confirmed in code**)
+`MAX_DISK_MB` is checked every `DISK_CHECK_SECONDS` (300) by reading `/system/df`, after the fact; inodes are not counted; if the read throws, enforcement silently returns (`gateway/src/sandbox.js`); the code default for `MAX_DISK_MB` is 0 (off), 2048 only in the compose file. Volumes are ordinary local volumes on the host's root filesystem. One user can write many gigabytes in five minutes and restart to do it again. **Fix:** put Docker's data root on its own filesystem with project quotas (xfs `pquota`) or size-limited volumes, keep the poll as a second layer, make it fail closed, and alert on host disk usage.
+
+### SEC-09. Volumes are named by user id, so a reset database hands a new account an old account's data (**Confirmed in code**)
+`runner/src/spec.js:46` binds `dsh-data-${userId}` and `dsh-ws-${userId}`; ids restart at 1 on a fresh database. This was seen directly during the live test run: test users reused ids 1 and 2 and attached to existing volumes and a running container (see the waiting-room result in [plan-phase-5.md](plan-phase-5.md)). After a lost or older-backup database, new user 1 mounts the previous user 1's workspace, including `~/.config/dsh/git-credentials`. **Fix:** a random per-account value in the volume name (stored in `users`), or labels checked by the runner before use; a delete-volumes path for account deletion.
+
+### SEC-10. Root containers holding powerful secrets, and an unfiltered Docker socket (**Confirmed in code**)
+The runner runs as root and mounts `/var/run/docker.sock` (root on the host for anyone who controls it); the gateway also runs as root (a stale comment says it needs the socket; it does not). Neither has `read_only`, `cap_drop`, `no-new-privileges` or limits. The runner is reached with a shared secret of at least 16 characters, so `aaaaaaaaaaaaaaaa` is accepted. The runner's API cannot be steered into a privileged container (sound), so the risk is a bug in the runner itself. **Fix:** `USER node` for the gateway; `read_only`, `cap_drop: [ALL]`, `no-new-privileges` on gateway, llm-proxy, egress-proxy and Caddy; a socket-filtering proxy in front of Docker allowing only the endpoints `runner/src/docker.js` uses; require 32 or more hex characters for the shared secrets and generate them in the bootstrap.
+
+### SEC-11. The Caddy configuration is for localhost only (**Confirmed in code**)
+`infra/Caddyfile.gateway` is `localhost { tls internal; reverse_proxy gateway:8080 }`, and `PUBLIC_URL: https://localhost/` is fixed in two places in the compose file. For a public host it needs: the real domain from the environment, automatic HTTPS (ports 80 and 443/tcp and 443/udp published on purpose), `Strict-Transport-Security`, `X-Content-Type-Options`, `Referrer-Policy`, a request body size limit and timeouts, no access log of query strings (reset and invite links, `?token=`), and a decision on `trusted_proxies` (SEC-04). `infra/Caddyfile` (the phase-1 variant) proxies to the sandbox directly and must never be deployed.
+
+### SEC-12. The sandbox image cannot be built from the repository, and the pinned harness build is from a dirty tree (**Confirmed in code**)
+`sandbox/Dockerfile:5` copies `.harness-dist/`, which is git-ignored and built from a sibling checkout; `sandbox/harness.lock` records `dirty=yes`, so its `commit=` does not describe what was built. A pipeline that checks out this repository cannot build the image, and the workaround (building on a laptop and copying the result to the server) puts unreviewed code into every user's agent. `scripts/stage-harness.sh` also copies untracked files from the harness checkout, so a stray secret file there would be baked into a world-readable path. **Fix:** build the harness in CI from a pinned, clean commit; refuse `dirty=yes`; stage from `git archive`; publish the image to a registry and deploy by digest. This is the main blocker for the pipeline.
+
+### SEC-13. Backups are unencrypted, kept in the checkout, and restore trusts the backup (**Confirmed in code** for the permissions; **reported** for the rest)
+`scripts/backup.sh` sets no `umask` or `chmod` and writes to `backups/` inside the repository checkout (a deploy that cleans the checkout deletes them; a lost server loses them too). A backup holds password hashes, live session tokens, per-user workspaces including stored GitHub tokens, and the Caddy volume (certificate and CA keys). `scripts/restore.sh` uses archive file names as volume names, so a backup from an untrusted source can overwrite any volume. **Fix:** `umask 077`; default to a directory outside the checkout; encrypt (`age`) and copy off the host; restrict restored names to the expected patterns; prune by age to match the stated retention; note that a restore revives old sessions and tokens.
+
+### SEC-14. The llm-proxy's budget and metering can be got around (**Confirmed in code**; the provider-side effects are **reported**, not tested)
+- The quota and global budget are checked before the call and recorded after it, with input size unbounded up to the body limit (8 MiB) and four concurrent requests per user, so a user can overshoot their quota and the shared daily budget by a large factor.
+- Only `model` is validated and the rest of the body is forwarded: `models` / `route` (provider-side fallback to a model not on the list), `plugins` and `web_search_options` (charges that are not token-metered), `n` (multiplied output), and a second output-limit key that is not clamped (`max_tokens` when `max_completion_tokens` is also sent).
+- A request aborted before the provider's headers arrive records no usage, though the provider may have billed the input.
+- **Fix:** reserve an estimate at admission into a per-user and global in-flight counter; build the upstream body from an allowlist of fields; force `n=1`; clamp both output keys; record the estimated input on any path after the request was forwarded; lower the body limit to a realistic size (about 1 MB); and set a spend cap with the provider itself.
+
+### SEC-15. The admin panel runs in the same origin as the sandbox UI, with no content-security policy (**Reported**; design property)
+Gateway pages, the admin panel and the proxied harness UI share one origin (the shell reaches into the iframe on purpose). Script running in the harness page (a prompt-injected agent that gets the UI to execute something, or any XSS in the harness) can fetch `/gw/admin`, read the CSRF token from the page and use the admin API with the admin's cookie. The CSRF token is bound to the session, which does not help against same-origin script. **Fix:** serve `/gw/admin` from its own host with a host-only cookie, or require a step-up (re-enter the password) for destructive admin actions; add a CSP to gateway pages (the built page has one external script and no inline script, so a tight policy is feasible); do not use an admin account for ordinary work meanwhile.
+
+### SEC-16. Egress is open to every public host by default, and the image ships scanners (**Confirmed in code**)
+`EGRESS_ALLOW_HOSTS` is empty by default (any public host on 80 and 443), and the image includes sqlmap, ffuf, gobuster, nuclei and httpx. Any invited user can aim them at third parties from the VPS's address, which VPS providers commonly treat as abuse. The egress filter also does not block the VPS's own public address. **Fix:** read the provider's acceptable-use policy first; set the scope list before opening sign-ups; the terms and attestation work in plan-phase-6 (S6-5) belongs before security users are invited.
+
+## P2: schedule
+
+### SEC-17. Egress proxy hardening (**Reported**; some need a test)
+DNS lookups use the shared four-thread pool and run before any limit, so a tarpitted name can stall name resolution for all sandboxes; the connection cap is global (64 per source can fill 256 with four sandboxes); per-destination limits are keyed by name, not address; denied requests are logged without limit; the plain-HTTP path forwards the client's `Host` header (domain fronting through an allowed CDN name); the upstream connection is not destroyed when the client leaves; a refusal message tells a sandbox which internal names exist; IPv6 ranges not blocked (Teredo, local NAT64, site-local). **Fix:** admit before resolving, use `dns.Resolver`, cap lookups, key by resolved address, throttle denial logs, overwrite `Host`, `out.destroy()` on close, one generic refusal, add the missing ranges.
+
+### SEC-18. Gateway resource and abuse bounds (**Confirmed in code**)
+Rate-limit maps never shrink (each fresh key lives forever), unauthenticated failures write one audit row and one log line each (including a client-chosen path up to 16 KB in `admin.denied`), the 5,000-entry waitlist cap can be filled by anyone, mail triggers can be used to annoy third parties and exhaust the 100-an-hour mail budget, and the invite code can be probed through the error pages of `POST /gw/signup` without counting against the limiter. **Fix:** a periodic sweep and a size cap on the limiter maps, truncate and de-duplicate audit rows from unauthenticated callers, a per-caller cap that does not depend on a forgeable address, probe invite status only after the limiter.
+
+### SEC-19. Sandbox and image details (**Confirmed in code**, impact limited by the container controls)
+`PATH` starts with the user-writable `/workspace/.local/bin` and the entrypoint runs `dsh` by name, so a user can shadow it: the policy patch (approval presets, proxy variables) is **not** a control against the user themselves, only the container is; the per-user model token is readable from `/proc/1/environ` (accepted design, it is metered); setuid binaries from the Debian base are left in the image; pip dependencies are not hash-locked and apt packages are not pinned; Dependabot does not cover `sandbox/pytools.txt` or `tools.lock`; the user-network address pool allows about 30 users before network creation fails (already noted in plan-phase-4). **Fix:** `exec /usr/local/bin/dsh`, `/workspace/.local/bin` last in `PATH`, strip setuid bits, hash-locked pip, a dated Debian snapshot, and a daemon `default-address-pools` setting.
+
+### SEC-20. Smaller items (**Reported** or **Confirmed in code**)
+Account enumeration at open sign-up ("could not create that account"); `normalizeEmail` accepts `,` `<` `>` `"` `;` in the local part and passes the address to Mailgun's `to`; the Origin check passes a missing Origin, ignores the scheme, and covers only `POST` under `/gw`; logout and password reset delete database sessions but do not close open WebSocket tunnels; raw internal error text from the runner is returned by `/gw/api/status`; the runner secret is reused as the HMAC key for opt-out and waitlist links (separated by prefixes, fine today; derive a dedicated key); those links never expire; no `__Host-` cookie prefix; Caddy's `Server` header; an internal bridge's host-side address may expose host services on some VPS firewall setups (**speculative**: test with `nc <bridge-ip> 22` from a sandbox and add `DOCKER-USER` rules).
+
+## Deployment pipeline and VPS requirements (for the next step)
+
+The pipeline must not repeat the problems above. These come from the infrastructure review and my checks.
+
+**Pipeline**
+1. Build in CI and deploy images **by digest** from a registry; do not build on the VPS. Requires SEC-12 first.
+2. Deploy only from `main` after the required checks pass, through a GitHub Environment (`production`) with required reviewers; deploy secrets are environment secrets, never repository secrets or available to pull requests. Keep `permissions: contents: read` at the top of workflows and never use `pull_request_target`.
+3. A dedicated SSH deploy key (ed25519, one host), stored only as an environment secret, tied on the VPS to a non-root `deploy` user with a forced command (`restrict`, a fixed deploy script). The host key is pinned (`known_hosts`), never `StrictHostKeyChecking=no`. The deploy user needs Docker, which is root-equivalent: the forced command must be the only thing it can run, and it must never be able to run `scripts/restart.sh --wipe` or the Docker test suites (they run `compose down -v`).
+4. **Do not write `.env` from CI.** Create it once by hand on the VPS (mode 600, owned by the deploy user), with fresh secrets of 32 or more hex characters. Add a `DOMAIN` variable and derive `PUBLIC_URL` and the Caddyfile from it.
+5. Never run a self-hosted GitHub runner on the production host; keep any gVisor acceptance runner separate (it sets `DSH_TESTS_ALLOW_DESTRUCTIVE=1`).
+6. An encrypted off-host backup before every deploy that touches a database; rollback as one command with the previous digests; migrations in `gateway/src/db.js` and `llm-proxy/src/db.js` checked as forward-compatible.
+7. A smoke test against the real domain after each deploy, with no `-k`: health, a WebSocket upgrade, one sandbox started under `runsc`.
+
+**VPS bootstrap**
+8. gVisor installed from its signed repository at a pinned version, `runsc install`, Docker restarted, `SANDBOX_RUNTIME=runsc` set explicitly, and **tested on the chosen VPS plan** (SEC-05).
+9. `daemon.json`: unix socket only (no TCP), `log-driver` with `max-size` and `max-file`, `live-restore`, `default-address-pools` sized for the user count; Docker's data root on its own filesystem, with quotas if possible (SEC-08).
+10. Host firewall that applies to Docker traffic (the `DOCKER-USER` chain or ufw-docker; plain `ufw` does not filter published container ports): allow 22, 80 and 443 (tcp, and udp for HTTP/3), nothing else. Verify with an external scan after the first start, and test that a sandbox cannot reach the host's bridge address on other ports (SEC-20).
+11. SSH keys only, no root login, fail2ban, unattended security upgrades with a controlled reboot (a Docker restart stops every sandbox).
+12. DNS records before the first start; time sync on; disk and certificate-expiry alerts; an external uptime check on `/gw/healthz`; alerts on service restarts, the token budget and failed-login rates (`scripts/audit.sh`).
+13. First run: `ALLOW_SIGNUP=false`, an admin created with `scripts/make-admin.sh`, `EGRESS_ALLOW_HOSTS` set, a provider-side spend cap plus `GLOBAL_DAILY_TOKEN_BUDGET`, and a written retention statement (audit rows 90 days; backups and logs also hold personal data).
+
+## What was checked and found sound
+
+- **Secrets and history:** no secret-shaped string anywhere in the git history (checked by pattern; none printed), no tracked `.env`, key or backup file, `.env.example` has empty values, required secrets fail closed (`${VAR:?}` and startup checks), the Mailgun key is not enumerable and never logged, `.env` and `backups/` cannot reach a build context (each build context is a subdirectory).
+- **Dependencies:** gateway, runner, llm-proxy and egress-proxy have **no runtime dependencies**; the web build has 3 production dependencies and `npm audit` reports no vulnerabilities (0 of any severity); base images, Caddy and the sandbox release binaries are pinned by digest or checksum and CI enforces it.
+- **Accounts and sessions:** scrypt with random salts and constant-time comparison, a dummy hash for unknown users, 256-bit session tokens stored only as hashes, a new token on every login, secure cookie flags, logout and suspend end sessions, the admin role is re-read on every request.
+- **Admin:** a single guard for every admin route, the CSRF token checked on every non-GET admin route, strictly validated route parameters, no state change on GET anywhere (the mail opt-out, waitlist confirmation and reset-link pages only show a form).
+- **Tokens and links:** reset tokens (256-bit, hashed, single use decided by one database statement, replaced by newer ones, sessions ended on use, `strict-origin` referrer policy), invite codes (96-bit, hashed, spent in a transaction), and mail links built from configuration, never from the `Host` header.
+- **Injection:** every SQL statement is parameterised; no `dangerouslySetInnerHTML` or `innerHTML` in the web code; the boot data is escaped for script context; redirects go through `safeNext`; static files are restricted by name and extension; the CSV export defuses formulas; log lines are JSON.
+- **Sandbox creation:** the runner builds the container specification only from a validated user id and token; no request field reaches the image, mounts, network mode, capabilities or command; every sandbox has `CapDrop ALL`, no-new-privileges, a read-only root, memory, CPU and process limits, no swap, a non-root user, the default seccomp profile, and its own internal network; the real provider key is never in a sandbox.
+- **llm-proxy:** 256-bit tokens stored hashed and replaced on re-issue, the client's credentials never forwarded, a fixed upstream URL and only two routed paths, model names matched exactly, the admin API on a unix socket with a constant-time secret check and validated keys, no content in logs.
+- **Egress proxy:** the dial goes to the address that was checked (no DNS rebinding), every answer is checked, literals in odd number formats are caught, scope matching requires a dot boundary (so `evil-example.com` does not match `example.com`), plain-HTTP requests drop hop-by-hop and proxy credentials, the CONNECT handler's error listener is attached first, no query strings or paths are logged.
+- **CI:** least-privilege `permissions`, actions pinned by SHA, no `pull_request_target`, no secrets.
+
+## Not covered, and not verified
+
+- **The harness itself** (`../deepseek-harness`): its internal policy code, what the web UI can be made to execute, and its behaviour if `dsh` is shadowed. The sandbox confinement relies on the container and bubblewrap, not on the harness's own checks.
+- **The host:** the VPS's `daemon.json`, firewall, kernel and the final image's actual list of setuid files do not exist yet or were not built here.
+- **Not run:** none of the reviewers ran anything. The three crashes above were reproduced by me; everything marked *Reported* still needs a test (for each, the reviewer gave the input to try).
+- **Behind Caddy:** whether Caddy rejects the malformed request target (SEC-01) was not checked; the sandbox path does not depend on it.
+- **Mail:** a real send through Mailgun is still unverified ([email.md](email.md)).
+
+## Proposed order of work
+
+Each item is one branch and one pull request with its own tests (a test that fails without the fix, per AGENTS.md).
+
+1. **Crash hardening (SEC-01, 02, 03):** URL parsing inside `try` everywhere, the egress status check, the upgrade socket listener, a last-resort handler, restart policies and a gateway healthcheck; a test per service that sends the bad input and checks it survives.
+2. **Network exposure and login (SEC-04, 06, 18):** take the gateway off the user networks (or trust the forwarded address only from Caddy), async scrypt with limits and a per-IP login cap, limiter sweeps, audit-write bounds. Verify from a real sandbox in the Docker suite that it can no longer reach the gateway.
+3. **Fail-closed isolation (SEC-05, 07, 08, 09):** require gVisor, log limits, disk limits that fail closed, per-account volume names.
+4. **Container hardening and secrets (SEC-10, 11):** non-root gateway, `read_only` and `cap_drop`, secret length checks, a production Caddyfile and compose file driven by `DOMAIN`.
+5. **Pipeline prerequisites (SEC-12, 13):** a reproducible harness build, a registry image, and backup permissions and encryption.
+6. **Metering (SEC-14) and egress (SEC-16, 17).**
+7. **Admin origin, CSP and the smaller items (SEC-15, 19, 20).**
+
+Then build the pipeline against the checklist above.
