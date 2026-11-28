@@ -51,10 +51,10 @@ test('D1 config: limits default to off in code, signup defaults to invite-only',
   assert.equal(loadConfig({ ...base, MAX_RUNNING_SANDBOXES: '5' }).maxRunningSandboxes, 5);
 });
 
-test('D1 capacity: a newcomer is refused with a clear message when full and nobody is idle long enough', async () => {
+test('D1 capacity: with the waiting room off, a newcomer is refused with a clear message when full and nobody is idle long enough', async () => {
   await withCookieServer(async (port) => {
     const runner = fakeRunner({ 1: { running: true }, 2: { running: true } });
-    const m = manager(runner, cfgOf({ MAX_RUNNING_SANDBOXES: '2' }, port));
+    const m = manager(runner, cfgOf({ MAX_RUNNING_SANDBOXES: '2', WAIT_QUEUE_SECONDS: '0' }, port)); // the waiting room has its own tests (waiting-room.test.mjs)
     m.lastSeen.set(1, Date.now()); m.lastSeen.set(2, Date.now());
     await assert.rejects(m.ensure(3), /at capacity/);
     assert.equal(m.status(3).state, 'error');
