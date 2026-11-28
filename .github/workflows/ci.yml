@@ -44,7 +44,7 @@ jobs:
           grep -Eq '^source_hash=[0-9a-f]{64}$' sandbox/harness.lock
           grep -Eq '^version=.+' sandbox/harness.lock
       - name: Shell scripts parse
-        run: for f in scripts/*.sh scripts/lima/*.sh sandbox/entrypoint.sh sandbox/install-tools.sh sandbox/bin/dsh-git tests/run.sh; do sh -n "$f" || exit 1; done
+        run: for f in scripts/*.sh scripts/lima/*.sh scripts/vps/*.sh sandbox/entrypoint.sh sandbox/install-tools.sh sandbox/bin/dsh-git tests/run.sh; do sh -n "$f" || exit 1; done
       - name: Compose files are valid
         env:
           RUNNER_SECRET: ci-runner-secret-0123456789
@@ -59,7 +59,7 @@ jobs:
       - name: Build the service images (the sandbox image needs the harness build and is not built here)
         run: |
           for svc in gateway runner llm-proxy egress-proxy; do
-            docker build -t "dshcloud-ci-$svc" "$svc"
+            docker build --build-context common=common -t "dshcloud-ci-$svc" "$svc"
           done
 
   acceptance:

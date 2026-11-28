@@ -1,0 +1,42 @@
+# Caddy for a public host (docs/security-review.md, SEC-11). Selected with CADDYFILE=Caddyfile.production in .env; the domain comes from
+# DOMAIN (for example DOMAIN=cloud.example.com). With DOMAIN unset the site address is empty and Caddy refuses to start: it fails closed
+# instead of answering for any name.
+#
+# The certificate is requested and renewed automatically (Let's Encrypt) over ports 80 and 443, which compose publishes, from a DNS name that
+# already points at this host. There is no `tls internal` here: that is the development certificate.
+{
+	servers {
+		timeouts {
+			# Slow headers (a slowloris client holding a connection open) are cut off. Bodies and responses are not given a read or
+			# write deadline: the workspace streams model output and holds WebSockets.
+			read_header 10s
+			idle 5m
+		}
+	}
+}
+
+{$DOMAIN} {
+	encode zstd gzip
+
+	# The gateway reads only small forms itself; this is the only bound on what is proxied to a workspace (file uploads).
+	request_body {
+		max_size 100MB
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		# Only when the gateway did not set its own (the reset pages send strict-origin on purpose).
+		?Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+
+	# The gateway listens on a unix socket in a volume shared with Caddy only, so no sandbox can reach it (SEC-04). No access log is
+	# configured: reset and invite links and launch tokens travel in query strings and must not be written down.
+	reverse_proxy unix//run/gw/gateway.sock {
+		transport http {
+			dial_timeout 5s
+			response_header_timeout 10m
+		}
+	}
+}

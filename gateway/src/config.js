@@ -1,3 +1,4 @@
+import { secretProblem } from '../../common/secret.js';
 export function loadConfig(env = process.env) {
   const publicUrl = env.PUBLIC_URL;
   if (!publicUrl) throw new Error('PUBLIC_URL is required (e.g. https://localhost/)');
@@ -5,10 +6,13 @@ export function loadConfig(env = process.env) {
   const runnerUrl = (env.RUNNER_URL || '').replace(/\/+$/, '');
   const runnerSecret = env.RUNNER_SECRET || '';
   if (!runnerUrl) throw new Error('RUNNER_URL is required (e.g. http://sandbox-runner:8090)');
-  if (runnerSecret.length < 16) throw new Error('RUNNER_SECRET is required (min 16 chars)');
+  const runnerProblem = secretProblem(runnerSecret);
+  if (runnerProblem) throw new Error(`RUNNER_SECRET ${runnerProblem}`);
   const llmAdminSocket = env.LLM_ADMIN_SOCKET || '';
   const llmAdminSecret = env.LLM_ADMIN_SECRET || '';
   if (llmAdminSocket && !llmAdminSecret) throw new Error('LLM_ADMIN_SECRET is required when LLM_ADMIN_SOCKET is set');
+  const adminProblem = llmAdminSecret ? secretProblem(llmAdminSecret) : null;
+  if (adminProblem) throw new Error(`LLM_ADMIN_SECRET ${adminProblem}`);
   const int = (k, d) => (env[k] === undefined || env[k] === '' ? d : Number.parseInt(env[k], 10));
   const mail = loadMailConfig(env, int);
   return {

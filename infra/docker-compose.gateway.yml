@@ -9,6 +9,16 @@ x-logging: &logging
   options:
     max-size: 20m
     max-file: "5"
+# What every long-running service gives up (docs/security-review.md, SEC-10): no capabilities, no way to gain privileges, a read-only
+# root filesystem (the volumes and a small tmpfs are the only writable places).
+x-hardening: &hardening
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  read_only: true
+  tmpfs:
+    - /tmp
 services:
   sandbox-image:
     build: ../sandbox
@@ -17,10 +27,20 @@ services:
     restart: "no"
   gateway:
     restart: unless-stopped # a crash or a reboot must not leave the site down (docs/security-review.md, SEC-03)
+    <<: *hardening
+    # Starts as root with these three only to take over volumes made by earlier versions, then drops everything and runs as node
+    # (gateway/docker-entrypoint.sh).
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
     logging: *logging
     mem_limit: 768m # several times what it uses idle (about 20 to 120 MB); a runaway or a flood cannot take the host's memory
     pids_limit: 512
-    build: ../gateway
+    build:
+      context: ../gateway
+      additional_contexts:
+        common: ../common # code shared by the services (common/secret.js), copied to /common in the image
     depends_on:
       sandbox-image:
         condition: service_completed_successfully
@@ -33,7 +53,8 @@ services:
     labels:
       dsh-cloud.role: gateway # sandbox-runner attaches it to every user network
     healthcheck:
-      test: ["CMD", "node", "-e", "require('http').get({ socketPath: process.env.GATEWAY_SOCKET, path: '/gw/healthz' }, (r) => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
+      # As node, like the gateway itself: the socket is owner and group only, and this container's root has no DAC_OVERRIDE.
+      test: ["CMD", "setpriv", "--reuid=node", "--regid=node", "--init-groups", "node", "-e", "require('http').get({ socketPath: process.env.GATEWAY_SOCKET, path: '/gw/healthz' }, (r) => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
       interval: 10s
       timeout: 3s
       retries: 5
@@ -41,7 +62,7 @@ services:
     environment:
       # No TCP port: the gateway listens on a unix socket that only Caddy shares, so a sandbox cannot reach it (SEC-04).
       GATEWAY_SOCKET: /run/gw/gateway.sock
-      PUBLIC_URL: https://localhost/
+      PUBLIC_URL: ${PUBLIC_URL:-https://localhost/} # the address people use, with https and a trailing slash; must match DOMAIN
       RUNNER_URL: http://sandbox-runner:8090
       RUNNER_SECRET: ${RUNNER_SECRET:?set RUNNER_SECRET in .env (see .env.example)}
       IDLE_SECONDS: ${IDLE_SECONDS:-1800}
@@ -93,15 +114,26 @@ services:
   # and token; reachable only by services on the compose network (never by sandboxes).
   sandbox-runner:
     restart: unless-stopped # a crash or a reboot must not leave the site down (docs/security-review.md, SEC-03)
+    <<: *hardening
+    # Root, with one capability: DAC_OVERRIDE, because the Docker socket's owner and group differ between hosts (root:docker on most,
+    # the Lima user on a Lima VM) and a root without it cannot open a socket it does not own. Everything else is dropped, no new
+    # privileges, a read-only filesystem. The socket itself is still root-equivalent on the host: this limits what a bug in the runner
+    # can do besides that. A host-specific alternative with no capability at all: run as a non-root user in the socket's group
+    # (docs/security-review.md, SEC-10).
+    cap_add:
+      - DAC_OVERRIDE
     logging: *logging
     mem_limit: 256m # several times what it uses idle (about 20 to 120 MB); a runaway or a flood cannot take the host's memory
     pids_limit: 512
-    build: ../runner
+    build:
+      context: ../runner
+      additional_contexts:
+        common: ../common # code shared by the services (common/secret.js), copied to /common in the image
     depends_on:
       sandbox-image:
         condition: service_completed_successfully
     environment:
-      PUBLIC_URL: https://localhost/
+      PUBLIC_URL: ${PUBLIC_URL:-https://localhost/} # the address people use, with https and a trailing slash; must match DOMAIN
       RUNNER_SECRET: ${RUNNER_SECRET:?set RUNNER_SECRET in .env (see .env.example)}
       SANDBOX_IMAGE: dsh-sandbox:latest
       # OCI runtime for user sandboxes: gVisor (runsc). The runner REFUSES TO START with runc or an empty value unless
@@ -127,10 +159,14 @@ services:
   # gateway (and still needs LLM_ADMIN_SECRET).
   llm-proxy:
     restart: unless-stopped # a crash or a reboot must not leave the site down (docs/security-review.md, SEC-03)
+    <<: *hardening
     logging: *logging
     mem_limit: 512m # several times what it uses idle (about 20 to 120 MB); a runaway or a flood cannot take the host's memory
     pids_limit: 512
-    build: ../llm-proxy
+    build:
+      context: ../llm-proxy
+      additional_contexts:
+        common: ../common # code shared by the services (common/secret.js), copied to /common in the image
     labels:
       dsh-cloud.role: llm-proxy # sandbox-runner attaches it to every user network
     environment:
@@ -154,6 +190,7 @@ services:
   # on every user network. Refuses private, loopback, link-local and metadata destinations; logs every request.
   egress-proxy:
     restart: unless-stopped # a crash or a reboot must not leave the site down (docs/security-review.md, SEC-03)
+    <<: *hardening
     logging: *logging
     mem_limit: 512m # several times what it uses idle (about 20 to 120 MB); a runaway or a flood cannot take the host's memory
     pids_limit: 512
@@ -176,14 +213,28 @@ services:
       - "3128"
   proxy:
     restart: unless-stopped # a crash or a reboot must not leave the site down (docs/security-review.md, SEC-03)
+    <<: *hardening
+    # The gateway's socket is mode 660, owner and group node (gid 1000). Caddy joins that group instead of being given DAC_OVERRIDE.
+    group_add:
+      - "1000"
+    cap_add:
+      - NET_BIND_SERVICE # to listen on 80 and 443
+    tmpfs: # overrides the merged one: Caddy also needs /config
+      - /tmp
+      - /config # Caddy's autosaved configuration
     logging: *logging
     mem_limit: 512m # several times what it uses idle (about 20 to 120 MB); a runaway or a flood cannot take the host's memory
     pids_limit: 512
     image: caddy:2.11.9@sha256:4851e54a46b206517c574821bb5cc67f170d2156041e9fbc4c9193b45e84a75b
     ports:
+      - "80:80" # the certificate challenge and the redirect to https
       - "443:443"
+      - "443:443/udp" # HTTP/3
+    environment:
+      DOMAIN: ${DOMAIN:-} # used by Caddyfile.production
     volumes:
-      - ./Caddyfile.gateway:/etc/caddy/Caddyfile:ro
+      # Caddyfile.gateway is the development one (localhost, a local certificate). A public host sets CADDYFILE=Caddyfile.production and DOMAIN.
+      - ./${CADDYFILE:-Caddyfile.gateway}:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
       - gateway-socket:/run/gw # the only way to the gateway: no sandbox shares this volume
     depends_on:

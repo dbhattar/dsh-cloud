@@ -2,6 +2,7 @@ FROM node:24.22.3-slim@sha256:dc26ae92c9fb15cf6b1d63e20f0944b2efe0f115b20e00be48
 WORKDIR /app
 COPY package.json ./
 COPY src ./src
+COPY --from=common . /common
 # Usage database lives on a named volume; created here so the volume inherits node's ownership.
 # /run/llm-admin holds the admin unix socket, on a volume shared only with the gateway.
 RUN mkdir /data /run/llm-admin && chown node:node /data /run/llm-admin

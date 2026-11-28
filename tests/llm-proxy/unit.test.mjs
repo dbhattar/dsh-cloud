@@ -14,7 +14,7 @@ import { createProxy } from '../../llm-proxy/src/server.js';
 import { SseUsageScanner, usageOf } from '../../llm-proxy/src/usage-parse.js';
 
 const REAL_KEY = 'sk-REAL-upstream-key-do-not-leak';
-const ADMIN = 'admin-secret-0123456789';
+const ADMIN = 'admin-secret-01234567890';
 const MODEL = 'test/model';
 
 const baseEnv = (extra = {}) => ({
@@ -94,7 +94,7 @@ async function harness({ env = {}, upstream = () => ok(), now } = {}) {
 test('config: refuses to start without key, admin secret or model allowlist', () => {
   assert.throws(() => loadConfig({}), /UPSTREAM_API_KEY/);
   assert.throws(() => loadConfig({ UPSTREAM_API_KEY: 'k' }), /ADMIN_SECRET/);
-  assert.throws(() => loadConfig({ UPSTREAM_API_KEY: 'k', ADMIN_SECRET: 'short' }), /16/);
+  assert.throws(() => loadConfig({ UPSTREAM_API_KEY: 'k', ADMIN_SECRET: 'short' }), /ADMIN_SECRET must be at least 24 characters/);
   assert.throws(() => loadConfig({ UPSTREAM_API_KEY: 'k', ADMIN_SECRET: ADMIN }), /ALLOWED_MODELS/);
   assert.throws(() => loadConfig(baseEnv({ DAILY_TOKEN_QUOTA: '-5' })), /DAILY_TOKEN_QUOTA/);
   const c = loadConfig(baseEnv({ UPSTREAM_BASE_URL: 'https://x.example/v1///', ALLOWED_MODELS: 'a, b' }));

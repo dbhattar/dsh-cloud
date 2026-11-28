@@ -19,7 +19,7 @@ const raw = (port, bytes) => new Promise((resolve) => {
 });
 
 test('the user port and the admin port answer a target that is not a valid URL with 400 and keep serving', async () => {
-  const cfg = loadConfig({ UPSTREAM_API_KEY: 'sk-real', ADMIN_SECRET: 'a'.repeat(20), ALLOWED_MODELS: 'm' });
+  const cfg = loadConfig({ UPSTREAM_API_KEY: 'sk-real', ADMIN_SECRET: 'admin-secret-01234567890', ALLOWED_MODELS: 'm' });
   const { user, admin } = createProxy({ cfg, store: new UsageStore(':memory:'), log: () => {} });
   for (const s of [user, admin]) { await new Promise((r) => s.listen(0, '127.0.0.1', r)); servers.push(s); }
   for (const [name, server] of [['user', user], ['admin', admin]]) {
