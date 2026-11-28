@@ -39,6 +39,7 @@ Working on this repository (people or agents): read [AGENTS.md](AGENTS.md) first
 - **Restricting web access:** `scripts/egress-scope.sh --set staging.example.org,*.api.example.org` limits the sandboxes' web access to those hosts plus what git, pip and the scanners need (`--clear` to undo); see [egress-proxy/README.md](egress-proxy/README.md).
 - **Admin panel:** make an account an admin with `scripts/make-admin.sh you@example.com` (the account must exist), then open `/gw/admin` or use the Admin link in the workspace bar.
 - **Signing up:** create invite links in the admin panel (Invites), or with `scripts/invite.sh create 3 --link` (bare codes without `--link`), or set `ALLOW_SIGNUP=true`. `scripts/invite.sh list` and `revoke ID` manage them from the shell.
+- **Branding:** the service shows its own icon, not DeepSeek's; what changed (including the workspace's sidebar and home page, through a small plugin), what is still DeepSeek's (the animated "running" whale) and how to regenerate the icons are in [docs/branding.md](docs/branding.md).
 - **Operating it:** `scripts/audit.sh` (audit trail), `scripts/usage.sh` (token usage), `scripts/backup.sh` and `scripts/restore.sh` ([docs/backup.md](docs/backup.md)).
 
 ## Upgrading the harness

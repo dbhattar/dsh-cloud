@@ -115,3 +115,10 @@ test('default workspace: the harness is told to use the workspace volume instead
   const y = patchFor();
   assert.match(row(y, 'workspace-controller').text, /config: \{ documentsDirectory: \/workspace \}/);
 });
+
+test('branding: the official whale plugin is switched off and the dsh-cloud brand plugin is inserted by file path', () => {
+  const y = patchFor();
+  assert.match(row(y, 'ui-brand-official').text, /^- id: ui-brand-official\n  disabled: true\n/);
+  // A directory path is refused by the loader ("Directory import is not supported"), so the row names the file.
+  assert.match(y, /^- insert:\n    - id: dsh-cloud-brand\n      name: \/opt\/dsh-brand\/lib\/index\.js$/m);
+});
