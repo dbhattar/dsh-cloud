@@ -43,6 +43,8 @@ jobs:
           grep -Eq '^commit=[0-9a-f]{40}$' sandbox/harness.lock
           grep -Eq '^source_hash=[0-9a-f]{64}$' sandbox/harness.lock
           grep -Eq '^version=.+' sandbox/harness.lock
+          grep -qx 'dirty=no' sandbox/harness.lock # the lock pins a commit, not someone's uncommitted edits (SEC-12)
+          grep -Eq '^repo=https://' sandbox/harness.lock
       - name: Shell scripts parse
         run: for f in scripts/*.sh scripts/lima/*.sh scripts/vps/*.sh sandbox/entrypoint.sh sandbox/install-tools.sh sandbox/bin/dsh-git tests/run.sh; do sh -n "$f" || exit 1; done
       - name: Compose files are valid

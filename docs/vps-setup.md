@@ -23,7 +23,7 @@ The phases run in this order, and `--only` and `--skip` pick some of them: `pref
 | Phase | Does |
 | --- | --- |
 | `preflight` | OS and architecture; memory and disk warnings; **refuses a Docker address pool (default `10.200.0.0/14`) that overlaps a network the host already uses** (providers often use 10.x privately), with `--docker-pool` as the way out |
-| `packages` | `ca-certificates curl gnupg ufw fail2ban unattended-upgrades jq openssl` |
+| `packages` | `ca-certificates curl gnupg ufw fail2ban unattended-upgrades jq openssl age` (`age` encrypts backups, [backup.md](backup.md)) |
 | `docker` | Docker Engine and the compose plugin from Docker's apt repository. **It refuses to continue unless the repository key's fingerprint is the expected one** |
 | `gvisor` | `runsc` from gVisor's apt repository, registered as a Docker runtime. The key is fetched over TLS and its fingerprint **printed** for you to compare with gVisor's documentation (it is not pinned here) |
 | `daemon` | merges `daemon.json`: `local` log driver (20m by 5), `live-restore`, the private address pool; **refuses a daemon that listens on TCP**. Does not restart Docker unless you pass `--yes` (a restart stops every running container) |
@@ -34,7 +34,7 @@ The phases run in this order, and `--only` and `--skip` pick some of them: `pref
 | `env` | creates `.env` (mode 600): `RUNNER_SECRET` and `LLM_ADMIN_SECRET` generated, `UPSTREAM_API_KEY` from `--upstream-key-file`, the `UPSTREAM_API_KEY` environment variable or a hidden prompt, `DOMAIN`, `PUBLIC_URL`, `CADDYFILE=Caddyfile.production`, `ALLOW_SIGNUP=false`. Secrets are never printed and never taken as an argument |
 | `verify` | `runsc` is registered; **a container under `runsc` really reports gVisor's kernel**; the log driver; nothing on Docker's TCP port; the firewall; what is listening |
 
-It does **not** start the stack. Next, as the deploy user: put the repository in `/opt/dsh-cloud`, put the harness build in place (this is the open item **SEC-12**: the sandbox image cannot yet be built from the repository alone), set `EGRESS_ALLOW_HOSTS` in `.env` before opening sign-ups, then
+It does **not** start the stack. Next, as the deploy user: put the repository in `/opt/dsh-cloud`, get the images (they are built by CI from a pinned harness commit and deployed by digest: [deploy-images.md](deploy-images.md); the sandbox image can no longer come from anyone's laptop), set `EGRESS_ALLOW_HOSTS` in `.env` before opening sign-ups, then
 `docker compose --env-file .env -f infra/docker-compose.gateway.yml up -d`, and from another machine check that only 22, 80 and 443 answer.
 
 ## What was checked

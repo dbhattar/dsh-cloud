@@ -8,6 +8,14 @@
 #                                      stopped first (docker compose ... down); user sandboxes must not be running
 #                                      when the backup holds their volumes. File ownership is restored too (see below).
 #
+# DIR may also be an encrypted dsh-STAMP.tar.age: add --identity KEYFILE (the age private key; keep it OFF the server). It is
+# decrypted into a private temporary directory that is removed when the script ends, and its contents are checked for names that
+# would escape that directory before anything is extracted.
+#
+# A restore brings back everything as of the backup: password hashes, sessions that were valid then (people who signed out, were
+# suspended or changed their password since are back), GitHub tokens inside workspaces. After restoring an old backup, check the
+# admin panel and revoke what should not be there.
+#
 # What --check verifies: every file's sha256 and size against the manifest; each database opens, passes SQLite's
 # integrity_check and has the same row count in every table as at backup time; each archive extracts and holds the
 # same number of files. It does not boot the stack from the restored data.
@@ -20,16 +28,35 @@ sha256() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$@"; else sh
 HERE="$(cd "$(dirname "$0")" && pwd)"
 MODE=""
 DIR=""
+IDENTITY=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --check) MODE=check; shift ;;
     --yes) MODE=restore; shift ;;
-    -h|--help) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --identity) [ $# -ge 2 ] || { echo "--identity needs a key file" >&2; exit 2; }; IDENTITY="$2"; shift 2 ;;
+    -h|--help) sed -n '2,/^set -eu/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*) echo "unknown option: $1 (try --help)" >&2; exit 2 ;;
     *) DIR="$1"; shift ;;
   esac
 done
 [ -n "$MODE" ] && [ -n "$DIR" ] || { echo "usage: scripts/restore.sh --check DIR | --yes DIR" >&2; exit 2; }
+case "$DIR" in
+  *.tar.age)
+    [ -f "$DIR" ] || { echo "no such file: $DIR" >&2; exit 1; }
+    [ -n "$IDENTITY" ] && [ -f "$IDENTITY" ] || { echo "$DIR is encrypted: pass --identity KEYFILE (the age private key)" >&2; exit 2; }
+    command -v age >/dev/null 2>&1 || { echo "age is not installed (apt install age / brew install age)" >&2; exit 1; }
+    umask 077
+    PLAIN="$(mktemp -d)"
+    trap 'rm -rf "$PLAIN"' EXIT INT TERM
+    age -d -i "$IDENTITY" "$DIR" > "$PLAIN/backup.tar" || { echo "could not decrypt $DIR with that key" >&2; exit 1; }
+    # Every member must live under one dsh-STAMP/ directory: no absolute path, no "..".
+    tar -tf "$PLAIN/backup.tar" | grep -Eq '^dsh-[0-9]{8}-[0-9]{6}/' || { echo "$DIR is not a backup made by scripts/backup.sh" >&2; exit 1; }
+    if tar -tf "$PLAIN/backup.tar" | grep -Ev '^dsh-[0-9]{8}-[0-9]{6}(/|$)' | grep -q . || tar -tf "$PLAIN/backup.tar" | grep -q '\.\.'; then
+      echo "$DIR holds paths outside its backup directory; refusing to extract it" >&2; exit 1
+    fi
+    tar -xf "$PLAIN/backup.tar" -C "$PLAIN" && rm -f "$PLAIN/backup.tar"
+    DIR="$(ls -d "$PLAIN"/dsh-*/ | head -1)"; DIR="${DIR%/}" ;;
+esac
 [ -f "$DIR/MANIFEST" ] || { echo "$DIR has no MANIFEST; is it a backup from scripts/backup.sh?" >&2; exit 1; }
 IMG="${BACKUP_IMAGE:-node:24.22.3-slim@sha256:dc26ae92c9fb15cf6b1d63e20f0944b2efe0f115b20e00be48fb23fceb061c54}"
 PROJECT="$(sed -n 's/^project=//p' "$DIR/MANIFEST")"
@@ -131,3 +158,4 @@ for f in "$DIR"/volumes/*.tar.gz; do
   echo "   $name"
 done
 echo "Restored. Start the stack again (scripts/restart.sh, or docker compose up -d)."
+echo "Note: sessions, proxy tokens and workspace credentials are back as of the backup date; check the admin panel and revoke what should not be there." >&2

@@ -52,7 +52,7 @@ before(async () => {
   await waitFor(async () => (await request('/gw/healthz')).status === 200, { what: 'gateway healthz' });
   users.admin = await signupUser('admin', run);
   users.target = await signupUser('target', run);
-  docker('exec', GATEWAY, 'node', 'src/cli.js', 'admin', 'grant', users.admin.email);
+  docker('exec', '-u', 'node', GATEWAY, 'node', 'src/cli.js', 'admin', 'grant', users.admin.email);
   await refreshCsrf();
   await request('/gw/api/start', { method: 'POST', headers: { cookie: users.target.cookie } });
   await waitSandboxUp(users.target);
@@ -96,14 +96,14 @@ test('a shorter idle time stops a real sandbox that the old one would have kept,
   assert.equal(status(users.target), 'running');
   assert.equal((await change('idleSeconds', 60)).status, 200);
   await waitFor(() => status(users.target) === 'exited', { timeoutMs: 150000, everyMs: 3000, what: 'idle stop under the new limit' });
-  const stop = tryDocker('exec', GATEWAY, 'node', 'src/cli.js', 'audit', '--user', String(users.target.id), '--event', 'sandbox.stop', '--json');
+  const stop = tryDocker('exec', '-u', 'node', GATEWAY, 'node', 'src/cli.js', 'audit', '--user', String(users.target.id), '--event', 'sandbox.stop', '--json');
   assert.match(stop, /"by":"idle"/);
   await restart(GATEWAY);
   const idle = await setting('idleSeconds');
   assert.deepEqual([idle.value, idle.source], [60, 'admin'], 'the override outlives a restart of the gateway');
   assert.equal((await reset('idleSeconds')).status, 200);
   assert.equal((await setting('idleSeconds')).value, 3600);
-  const log = tryDocker('exec', GATEWAY, 'node', 'src/cli.js', 'audit', '--event', 'admin.policy*', '--json');
+  const log = tryDocker('exec', '-u', 'node', GATEWAY, 'node', 'src/cli.js', 'audit', '--event', 'admin.policy*', '--json');
   assert.match(log, /"key":"idleSeconds"[^}]*"to":60/);
 });
 

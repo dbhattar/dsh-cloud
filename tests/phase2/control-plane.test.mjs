@@ -66,7 +66,7 @@ after(() => {
 test('unauthenticated access is refused', async () => {
   const page = await request('/', { headers: { accept: 'text/html' } });
   assert.equal(page.status, 303);
-  assert.equal(page.headers.location, '/gw/login');
+  assert.equal(page.headers.location, '/gw/login?next=%2F', 'sent to sign in, and brought back here afterwards');
   assert.equal((await request('/api/anything')).status, 401);
   assert.notEqual((await wsHandshake('/api/remote.mux')).status, 101);
   assert.equal((await request('/gw/api/status')).status, 401);
@@ -136,7 +136,8 @@ test('sandbox credentials never reach the browser', async () => {
   // A browser-supplied dsh cookie or token query must not be what authenticates: the gateway cookie rules.
   const noSession = await request(`/?token=${token}`, { headers: { accept: 'text/html' } });
   assert.equal(noSession.status, 303);
-  assert.equal(noSession.headers.location, '/gw/login');
+  assert.match(noSession.headers.location, /^\/gw\/login(\?next=|$)/);
+  assert.equal(noSession.headers['set-cookie'], undefined);
 });
 
 test('WebSocket proxies for the owner and is refused without a session', async () => {
@@ -193,7 +194,7 @@ test('top-level navigation gets the account shell; the iframe gets the harness; 
   assert.equal(doc.status, 200);
   // The shell is a React page: the server embeds its data and the client renders the iframe and the sign-out form.
   const boot = JSON.parse(/<script id="gw-boot" type="application\/json">(.*?)<\/script>/s.exec(doc.body)[1]);
-  assert.deepEqual(boot, { page: 'shell', email: users.a.email, src: '/some/deep/link?x=1' });
+  assert.deepEqual(boot, { page: 'shell', email: users.a.email, src: '/some/deep/link?x=1', workspaceName: 'Workspace' });
   assert.match(doc.headers['content-security-policy'], /frame-ancestors 'self'/);
   // protocol-relative paths must not turn into an external iframe src
   const evil = await request('//evil.example/x', { headers: { cookie: users.a.cookie, 'sec-fetch-dest': 'document' } });
@@ -205,7 +206,7 @@ test('top-level navigation gets the account shell; the iframe gets the harness; 
   assert.equal(frame.headers['x-frame-options'], 'SAMEORIGIN');
   // logged-out document navigation goes to login, not to a shell
   const anon = await request('/', { headers: { accept: 'text/html', 'sec-fetch-dest': 'document' } });
-  assert.equal(anon.headers.location, '/gw/login');
+  assert.equal(anon.headers.location, '/gw/login?next=%2F');
 });
 
 test('logout invalidates the session', async () => {

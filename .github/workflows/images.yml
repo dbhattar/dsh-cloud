@@ -1,0 +1,56 @@
+# Build the five images from this commit and publish them to GitHub's container registry, by digest (docs/deploy-images.md).
+# The harness is fetched from the commit pinned in sandbox/harness.lock, never from a working tree, and built with
+# scripts/build-harness.sh --locked. Nothing here deploys anything. Not yet run on GitHub.
+#
+# Secrets: HARNESS_REPO_TOKEN, only if the harness repository is private: a fine-grained token with read access to that one repository.
+name: images
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+  packages: write
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Read the harness lock
+        id: lock
+        run: |
+          repo="$(sed -n 's/^repo=https:\/\/github\.com\///p' sandbox/harness.lock | sed 's/\.git$//')"
+          commit="$(sed -n 's/^commit=//p' sandbox/harness.lock)"
+          echo "$repo" | grep -Eq '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$' || { echo "sandbox/harness.lock has no GitHub repo= line" >&2; exit 1; }
+          echo "$commit" | grep -Eq '^[0-9a-f]{40}$' || { echo "sandbox/harness.lock has no commit" >&2; exit 1; }
+          grep -qx 'dirty=no' sandbox/harness.lock || { echo "sandbox/harness.lock pins uncommitted edits" >&2; exit 1; }
+          echo "repo=$repo" >> "$GITHUB_OUTPUT"; echo "commit=$commit" >> "$GITHUB_OUTPUT"
+      - name: Check out the locked harness commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ steps.lock.outputs.repo }}
+          ref: ${{ steps.lock.outputs.commit }}
+          token: ${{ secrets.HARNESS_REPO_TOKEN || github.token }}
+          path: deepseek-harness
+          persist-credentials: false
+      - name: Build the harness from the lock
+        env:
+          HARNESS_DIR: ${{ github.workspace }}/deepseek-harness
+        run: scripts/build-harness.sh --locked
+      - name: Log in to the registry
+        run: echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+      - name: Build and push the images
+        env:
+          HARNESS_DIR: ${{ github.workspace }}/deepseek-harness
+        run: |
+          registry="ghcr.io/$(echo "$GITHUB_REPOSITORY" | tr 'A-Z' 'a-z')"
+          scripts/publish-images.sh --registry "$registry" --tag "sha-$GITHUB_SHA" --out images.env
+      - name: Show the digests
+        run: |
+          { echo '### Image digests'; echo; echo '```'; cat images.env; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: images-env
+          path: images.env
+          if-no-files-found: error

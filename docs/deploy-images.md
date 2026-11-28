@@ -1,0 +1,34 @@
+# Images: built in CI from a pinned harness, deployed by digest
+
+Security review item SEC-12 ([security-review.md](security-review.md)). Written 2026-11-27. Read with [build-pinning.md](build-pinning.md) (what is pinned) and [vps-setup.md](vps-setup.md).
+
+## The problem this solves
+
+The sandbox image copied `sandbox/.harness-dist/`, a git-ignored folder built from a sibling checkout on one person's machine, and `sandbox/harness.lock` recorded `dirty=yes` (uncommitted edits): the lock's commit did not describe what ran in every user's agent. A pipeline that only checks out this repository could not build the image, and the workaround (build on a laptop, copy to the server) puts unreviewed code on the server. `stage-harness.sh` also copied *untracked* files from the checkout, so a stray secret file there would have been baked into a world-readable path.
+
+## How it works now
+
+1. **The lock pins a commit, in a repository CI can fetch.** `sandbox/harness.lock` has `repo=` (the https URL of the harness repository), `commit=`, `dirty=no`, `version=` and `source_hash=` (a hash of the staged files). `scripts/harness-lock.sh --update` writes it and **refuses** a checkout with uncommitted changes and a commit that no remote branch contains. `--check` refuses `dirty=yes`.
+2. **A release build stages the commit, not the working tree.** `scripts/stage-harness.sh --commit SHA` uses `git archive`: only committed files, nothing untracked, nothing edited since. `scripts/build-harness.sh --locked` does this for the locked commit after `--check` has recomputed the hash from that commit. The working-tree mode (no flag) still exists for development, and says `dirty=yes` in `.staged-from`.
+3. **The image carries the proof.** `BUILD_INFO` in the image holds commit, `dirty=` and the hash. `sandbox/Dockerfile` takes `--build-arg REQUIRE_CLEAN_HARNESS=1` and fails the build unless `BUILD_INFO` says `dirty=no`.
+4. **CI builds and pushes.** `.github/workflows/images.yml` (manual, or on a `v*` tag; never on a pull request) reads the lock, checks out *that commit* of the harness repository with `persist-credentials: false`, runs `scripts/build-harness.sh --locked`, then `scripts/publish-images.sh`, which refuses a built harness that is not the locked commit, tracked files with uncommitted changes, and a registry or tag that is not a plain reference; builds the five images; pushes them as `ghcr.io/<owner>/<repo>-<name>:sha-<commit>`; reads each **registry digest** back; and writes `images.env`.
+5. **Servers deploy by digest.** Compose takes `GATEWAY_IMAGE`, `RUNNER_IMAGE`, `LLM_PROXY_IMAGE`, `EGRESS_PROXY_IMAGE` and `SANDBOX_IMAGE` from the environment (defaults are the local build names, so nothing changes for development). The lines of `images.env` go into the server's environment (not into `.env` from CI: see the pipeline notes in the security review), then `docker compose pull && docker compose up -d --no-build`. A tag can move; a digest cannot.
+
+## Setting it up (once)
+
+- Commit the harness changes in your harness fork and push them. Then, in this repository: `scripts/harness-lock.sh --update`, review `sandbox/harness.lock`, commit it.
+- If the harness repository is **private**, make a fine-grained personal access token with read-only **Contents** access to that one repository and save it as the repository secret `HARNESS_REPO_TOKEN`. If it is public, nothing is needed.
+- Packages: the first push creates private packages under your account; the VPS needs a way to pull them (`docker login ghcr.io` with a read-only token, once, by hand on the server).
+- Run the workflow (Actions, images, Run workflow) and read the digests in the job summary.
+
+## Updating the harness
+
+Commit and push in the harness repository, then `scripts/harness-lock.sh --update` here, commit the lock in a pull request. The `checks` job in CI rejects a lock with `dirty=yes` or no `repo=`; `tests/scripts/harness-lock.test.mjs` runs the same rule on the committed file.
+
+## What was verified, and what was not
+
+- **Verified (tests, no Docker):** `tests/scripts/harness-lock.test.mjs` and `tests/scripts/publish-images.test.mjs` run the real scripts against throwaway git repositories and a stub `docker`: the lock refuses dirty and unpushed commits; `--check` ignores the working tree and fails on a changed hash or a commit missing from the checkout; an untracked secret file is staged by the development mode and **not** by `--commit`; only full commit ids are accepted; publish refuses a dirty or different harness, a dirty tree and bad registry names, writes five digest lines, and leaves no `images.env` when a digest is missing. Mutations (the dirty refusal removed, `git archive` replaced by a copy of the working tree) each failed tests. `tests/sandbox/pins.test.mjs` checks the workflow (actions pinned by commit, a timeout, no pull request trigger, the lock commit used) and that compose takes the five image variables.
+- **Local build of the locked commit, done (Lima VM, 2026-11-28):** `build-harness.sh --locked` built harness 0.2.3-alpha.2 from commit `a7f7640fba0c` (`dirty=no`, the hash matching the lock) in about 2 minutes once the layers were cached, and the sandbox image then built with `REQUIRE_CLEAN_HARNESS=1`; `dsh --version` in it prints `0.2.3-alpha.2` and its `BUILD_INFO` says `dirty=no`. **Two problems found by doing it:** (1) the VM has no `node`, so staging recorded `version=unknown` and `--check` rightly refused; the version is now read with `sed`. (2) `docker build --output type=local` (the harness export, about 115,000 files) **stalled three times** part-way through, on the Mac side of Lima and inside the VM alike, while the daemon sat at high CPU; saving the stage as an image and `docker cp`-ing it out works, so `build-harness.sh` now does that. It is unknown whether GitHub's runners would have hit the stall. Not tried: a build on a plain Linux host without Lima.
+- **Verified with real Docker (Lima VM):** `docker compose config` shows a registry digest taking the place of the local name; building the sandbox image from the current (dirty) harness build with `REQUIRE_CLEAN_HARNESS=1` **fails** at that line, and builds normally without the argument.
+- **Not verified:** the workflow has **never run on GitHub**; `docker push` to ghcr.io and the read-back of a digest have not been tried (the unit test uses a stub); a server pulling the images; the same build with a harness built from a clean commit (none exists until the harness edits are committed); `git archive` of the real harness repository versus the working-tree staging (the harness has no `export-ignore` attributes today, which I checked; a future one would change the hash, and `--check` would say so).
+- **Not done:** image signing and an SBOM (the digest identifies the bytes, not who built them); scanning the images for known vulnerabilities in CI; a pipeline that deploys (the next step).
