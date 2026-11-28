@@ -5,6 +5,7 @@ import { LlmProxyClient } from './llm.js';
 import { Audit } from './audit.js';
 import { RunnerClient } from './runner.js';
 import { SandboxManager } from './sandbox.js';
+import { listenGateway } from './listen.js';
 import { createGateway } from './server.js';
 
 const cfg = loadConfig();
@@ -27,10 +28,11 @@ manager.startReaper();
 setInterval(() => {
   store.purgeExpired();
   if (cfg.auditRetentionDays) store.purgeAudit(Date.now() - cfg.auditRetentionDays * 86400000);
+  store.purgeUnconfirmedWaitlist(Date.now() - 14 * 86400000); // an address nobody confirmed in two weeks is not waiting
 }, 3600 * 1000).unref();
 
 const server = createGateway({ cfg, store, manager, log, audit });
 manager.onAgentFinished = (userId) => server.mail.taskFinished(userId);
-server.listen(cfg.port, '0.0.0.0', () => {
-  log(`gateway listening on :${cfg.port}, public ${cfg.publicUrl}, signup=${cfg.allowSignup}, mail=${cfg.mail.provider}`);
+const where = listenGateway(server, cfg, () => {
+  log(`gateway listening on ${where}, public ${cfg.publicUrl}, signup=${cfg.allowSignup}, mail=${cfg.mail.provider}`);
 });

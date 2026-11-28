@@ -108,6 +108,19 @@ test('sandbox cannot reach the runner, the internet or cloud metadata', () => {
   assert.equal(tryDocker('exec', u.container, 'sh', '-c', 'test -e /var/run/docker.sock && echo yes'), '', 'no Docker socket');
 });
 
+test('the gateway is not reachable from a sandbox: no TCP port at all, and its socket volume is mounted by Caddy and the gateway only (SEC-04)', () => {
+  const u = users.a;
+  // The runner attaches the gateway to every user network so it can reach each sandbox; before the socket, that also let the sandbox
+  // reach the gateway's port directly, forge X-Forwarded-For, and open every route without Caddy.
+  for (const port of [8080, 80, 443, 3080]) assert.equal(connectFrom(u, 'gateway', port), 'blocked', `gateway:${port}`);
+  assert.equal(tryDocker('exec', u.container, 'sh', '-c', 'ls /run/gw 2>/dev/null'), '', 'no socket directory in the sandbox');
+  const mounters = docker('ps', '-aq', '--filter', 'volume=dshcloud_gateway-socket').split('\n').filter(Boolean).map((id) => docker('inspect', '-f', '{{.Name}}', id)).sort();
+  assert.deepEqual(mounters, ['/dshcloud-gateway-1', '/dshcloud-proxy-1']);
+  // and the shared services it is meant to use are still there
+  assert.equal(connectFrom(u, 'llm-proxy', 8081), 'open');
+  assert.equal(connectFrom(u, 'egress-proxy', 3128), 'open');
+});
+
 test('web access only through the egress proxy: public hosts work, private and metadata addresses are refused and logged', () => {
   const u = users.a;
   const fetchFrom = (url) =>
