@@ -10,7 +10,9 @@ export function loadConfig(env = process.env) {
   const llmAdminSecret = env.LLM_ADMIN_SECRET || '';
   if (llmAdminSocket && !llmAdminSecret) throw new Error('LLM_ADMIN_SECRET is required when LLM_ADMIN_SOCKET is set');
   const int = (k, d) => (env[k] === undefined || env[k] === '' ? d : Number.parseInt(env[k], 10));
+  const mail = loadMailConfig(env, int);
   return {
+    mail,
     port: int('PORT', 8080),
     dataDir: env.DATA_DIR || '/data',
     publicUrl: url.href,
@@ -50,4 +52,44 @@ export function loadConfig(env = process.env) {
     crashWindowSeconds: int('CRASH_WINDOW_SECONDS', 600),
     sessionTtlSeconds: int('SESSION_TTL_SECONDS', 7 * 24 * 3600),
   };
+}
+
+const MAIL_PROVIDERS = ['log', 'outbox', 'mailgun'];
+
+/**
+ * Outgoing mail (docs/email.md). `log` (the default) sends nothing: the gateway records only that a message would have gone out.
+ * `outbox` writes each message to a folder, for trying the flows on one machine (the files hold links with tokens: not for
+ * production). `mailgun` sends through Mailgun's HTTP API. The key is read here once and is never logged or put in an audit row.
+ */
+function loadMailConfig(env, int) {
+  const provider = (env.MAIL_PROVIDER || 'log').trim();
+  if (!MAIL_PROVIDERS.includes(provider)) throw new Error(`MAIL_PROVIDER must be one of ${MAIL_PROVIDERS.join(', ')} (got "${provider.slice(0, 20)}")`);
+  const region = (env.MAILGUN_REGION || 'us').trim().toLowerCase();
+  if (!['us', 'eu'].includes(region)) throw new Error('MAILGUN_REGION must be us or eu');
+  const mail = {
+    provider,
+    from: (env.MAIL_FROM || '').trim(),
+    mailgunKey: env.MAILGUN_API_KEY || '',
+    mailgunDomain: (env.MAILGUN_DOMAIN || '').trim(),
+    // The API address follows the region; MAILGUN_API_BASE exists for tests against a fake server.
+    apiBase: (env.MAILGUN_API_BASE || (region === 'eu' ? 'https://api.eu.mailgun.net' : 'https://api.mailgun.net')).replace(/\/+$/, ''),
+    outboxDir: env.MAIL_OUTBOX_DIR || '',
+    perAddressPerHour: int('MAIL_MAX_PER_ADDRESS_HOUR', 5),
+    perHour: int('MAIL_MAX_PER_HOUR', 100),
+    resetMinutes: int('MAIL_RESET_MINUTES', 60),
+    taskNotices: env.MAIL_TASK_NOTICES !== 'false',
+    taskNoticeHours: int('MAIL_TASK_NOTICE_HOURS', 6),
+    attempts: 3,
+    retryDelaysMs: [1000, 4000],
+    timeoutMs: 10000,
+  };
+  if (provider === 'mailgun') {
+    if (!mail.mailgunKey) throw new Error('MAILGUN_API_KEY is required when MAIL_PROVIDER=mailgun');
+    if (!/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(mail.mailgunDomain)) throw new Error('MAILGUN_DOMAIN is required when MAIL_PROVIDER=mailgun (for example mg.example.com)');
+  }
+  if (provider !== 'log' && !/^[^\r\n<>]*<?[^\s@<>]+@[^\s@<>]+>?$/.test(mail.from)) throw new Error('MAIL_FROM is required when mail is on (for example: dsh-cloud <noreply@mg.example.com>)');
+  if (provider === 'outbox' && !mail.outboxDir) throw new Error('MAIL_OUTBOX_DIR is required when MAIL_PROVIDER=outbox');
+  // Not enumerable: a configuration object that is printed or spread by mistake must not carry the key along.
+  Object.defineProperty(mail, 'mailgunKey', { enumerable: false });
+  return mail;
 }

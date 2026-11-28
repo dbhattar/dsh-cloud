@@ -39,8 +39,28 @@ export function appShellPage({ email, src, workspaceName = 'Workspace' }) {
  * the code; `next` is a vetted path to return to after signing in; `email` refills the form after a failure; `mode` picks which
  * form leads ('signup' for an invite link).
  */
-export function loginPage({ error, allowSignup, inviteRequired = false, invite = null, next = null, email = null, mode = 'login' }) {
-  return render('Sign in', { page: 'login', error, allowSignup: !!allowSignup, inviteRequired: !!inviteRequired, invite, next, email, mode });
+export function loginPage({ error, notice, canReset = false, canJoinWaitlist = false, allowSignup, inviteRequired = false, invite = null, next = null, email = null, mode = 'login' }) {
+  return render('Sign in', { page: 'login', error, notice, canReset: !!canReset, canJoinWaitlist: !!canJoinWaitlist, allowSignup: !!allowSignup, inviteRequired: !!inviteRequired, invite, next, email, mode });
+}
+
+/** Ask for a reset link (/gw/forgot). `available` is false when no mail is set up; `sent` is the one answer to every request. */
+export function forgotPage({ available = true, sent = false, error, email = null }) {
+  return render('Reset your password', { page: 'forgot', available: !!available, sent: !!sent, error, email });
+}
+
+/** Ask for a place (/gw/waitlist). `done` is the one answer to every request; `confirmMail` says a confirmation message was promised. */
+export function waitlistPage({ done = false, confirmMail = false, error, email = null }) {
+  return render('Join the waitlist', { page: 'waitlist', done: !!done, confirmMail: !!confirmMail, error, email });
+}
+
+/** Choose a new password (/gw/reset?token=). `status` is the token's state; the form shows only for 'valid'. */
+export function resetPage({ token, status, error }) {
+  return render('Choose a new password', { page: 'reset', token: status === 'valid' ? token : '', status, error });
+}
+
+/** A short message with at most one button: `action` is { label, href, fields } posted as a form. */
+export function noticePage({ title, message, action = null }) {
+  return render(title, { page: 'notice', title, message, action });
 }
 
 /** The admin panel (/gw/admin), served only to admins; see admin.js. */

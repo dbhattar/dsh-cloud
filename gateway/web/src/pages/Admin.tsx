@@ -3,6 +3,7 @@ import { Button } from '../controls.tsx';
 import { AuditPage } from './AdminAudit.tsx';
 import { FeedbackPage } from './AdminFeedback.tsx';
 import { InvitesPage } from './AdminInvites.tsx';
+import { WaitlistPage } from './AdminWaitlist.tsx';
 import { OverviewPage } from './AdminOverview.tsx';
 import { PoliciesPage } from './AdminPolicies.tsx';
 import { UserPage, UsersPage } from './AdminUsers.tsx';
@@ -16,7 +17,7 @@ import styles from './Admin.module.css';
 export function Admin({ email, csrf }: { email: string; csrf: string }) {
   const path = location.pathname.replace(/\/+$/, '');
   const user = /^\/gw\/admin\/users\/(\d+)$/.exec(path);
-  const section = (['users', 'invites', 'feedback', 'audit', 'policies'] as const).find((s) => path.startsWith(`/gw/admin/${s}`)) ?? 'overview';
+  const section = (['users', 'invites', 'waitlist', 'feedback', 'audit', 'policies'] as const).find((s) => path.startsWith(`/gw/admin/${s}`)) ?? 'overview';
   return (
     <div className={styles.page}>
       <header className={styles.bar}>
@@ -31,12 +32,13 @@ export function Admin({ email, csrf }: { email: string; csrf: string }) {
           <a href="/gw/admin" aria-current={section === 'overview' ? 'page' : undefined}>Overview</a>
           <a href="/gw/admin/users" aria-current={section === 'users' ? 'page' : undefined}>Users</a>
           <a href="/gw/admin/invites" aria-current={section === 'invites' ? 'page' : undefined}>Invites</a>
+          <a href="/gw/admin/waitlist" aria-current={section === 'waitlist' ? 'page' : undefined}>Waitlist</a>
           <a href="/gw/admin/feedback" aria-current={section === 'feedback' ? 'page' : undefined}>Feedback</a>
           <a href="/gw/admin/audit" aria-current={section === 'audit' ? 'page' : undefined}>Audit log</a>
           <a href="/gw/admin/policies" aria-current={section === 'policies' ? 'page' : undefined}>Policies</a>
         </nav>
         <main className={styles.main}>
-          {user ? <UserPage id={Number(user[1])} csrf={csrf} myEmail={email} /> : section === 'users' ? <UsersPage /> : section === 'invites' ? <InvitesPage csrf={csrf} /> : section === 'feedback' ? <FeedbackPage csrf={csrf} /> : section === 'audit' ? <AuditPage /> : section === 'policies' ? <PoliciesPage csrf={csrf} /> : <OverviewPage />}
+          {user ? <UserPage id={Number(user[1])} csrf={csrf} myEmail={email} /> : section === 'users' ? <UsersPage /> : section === 'invites' ? <InvitesPage csrf={csrf} /> : section === 'waitlist' ? <WaitlistPage csrf={csrf} /> : section === 'feedback' ? <FeedbackPage csrf={csrf} /> : section === 'audit' ? <AuditPage /> : section === 'policies' ? <PoliciesPage csrf={csrf} /> : <OverviewPage />}
         </main>
       </div>
     </div>

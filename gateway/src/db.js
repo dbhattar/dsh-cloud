@@ -47,6 +47,19 @@ export class Store {
         updated_at INTEGER NOT NULL,
         updated_by INTEGER
       );
+      CREATE TABLE IF NOT EXISTS reset_tokens (
+        token_hash TEXT PRIMARY KEY,
+        user_id INTEGER NOT NULL REFERENCES users(id),
+        created_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL,
+        used_at INTEGER
+      );
+      CREATE TABLE IF NOT EXISTS waitlist (
+        email TEXT PRIMARY KEY,
+        created_at INTEGER NOT NULL,
+        confirmed_at INTEGER,
+        invited_at INTEGER
+      );
       CREATE TABLE IF NOT EXISTS invites (
         code_hash TEXT PRIMARY KEY,
         note TEXT NOT NULL DEFAULT '',
@@ -66,6 +79,7 @@ export class Store {
     const feedbackColumns = this.db.prepare('PRAGMA table_info(feedback)').all().map((c) => c.name);
     if (!feedbackColumns.includes('read_at')) this.db.exec('ALTER TABLE feedback ADD COLUMN read_at INTEGER');
     if (!columns.includes('suspended_at')) this.db.exec('ALTER TABLE users ADD COLUMN suspended_at INTEGER');
+    if (!columns.includes('mail_notices')) this.db.exec('ALTER TABLE users ADD COLUMN mail_notices INTEGER NOT NULL DEFAULT 1');
   }
   addAudit({ ts = Date.now(), event, userId = null, ip = null, detail = {} }) {
     this.db.prepare('INSERT INTO audit (ts, event, user_id, ip, detail) VALUES (?, ?, ?, ?, ?)').run(ts, event, userId, ip, JSON.stringify(detail));
@@ -340,5 +354,69 @@ export class Store {
   }
   purgeExpired() {
     this.db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(Date.now());
+    this.db.prepare('DELETE FROM reset_tokens WHERE expires_at < ?').run(Date.now() - 86400000);
+  }
+  // ---- the waitlist: people without an invite who asked for a place (docs/email.md) ----
+  /** 'new', 'exists', or 'full' (the list is capped so it cannot be used to fill the database). */
+  joinWaitlist(email, now = Date.now(), cap = 5000) {
+    if (this.db.prepare('SELECT 1 FROM waitlist WHERE email = ?').get(email)) return 'exists';
+    if (Number(this.db.prepare('SELECT COUNT(*) AS n FROM waitlist').get().n) >= cap) return 'full';
+    this.db.prepare('INSERT INTO waitlist (email, created_at) VALUES (?, ?)').run(email, now);
+    return 'new';
+  }
+  /** The person confirmed that the address is theirs. False if they are not on the list. */
+  confirmWaitlist(email, now = Date.now()) {
+    return this.db.prepare('UPDATE waitlist SET confirmed_at = COALESCE(confirmed_at, ?) WHERE email = ?').run(now, email).changes > 0;
+  }
+  waitlistEntry(email) {
+    const r = this.db.prepare('SELECT * FROM waitlist WHERE email = ?').get(email);
+    return r ? { email: r.email, joinedAt: r.created_at, confirmedAt: r.confirmed_at ?? null, invitedAt: r.invited_at ?? null } : null;
+  }
+  /** Oldest first: the order people asked in. */
+  listWaitlist(limit = 500) {
+    return this.db.prepare('SELECT * FROM waitlist ORDER BY created_at, email LIMIT ?').all(limit).map((r) => ({ email: r.email, joinedAt: r.created_at, confirmedAt: r.confirmed_at ?? null, invitedAt: r.invited_at ?? null }));
+  }
+  markWaitlistInvited(email, now = Date.now()) {
+    return this.db.prepare('UPDATE waitlist SET invited_at = ? WHERE email = ?').run(now, email).changes > 0;
+  }
+  removeFromWaitlist(email) {
+    return this.db.prepare('DELETE FROM waitlist WHERE email = ?').run(email).changes > 0;
+  }
+  userById(id) {
+    return this.db.prepare('SELECT * FROM users WHERE id = ?').get(id);
+  }
+  // ---- password reset (docs/email.md). Only the hash of a token is stored; a token works once and expires. ----
+  /** A new reset token for the user (the plaintext is returned once). Earlier unused tokens of that user stop working. */
+  createResetToken(userId, ttlMs, now = Date.now()) {
+    const token = randomBytes(32).toString('base64url');
+    this.db.prepare('UPDATE reset_tokens SET used_at = ? WHERE user_id = ? AND used_at IS NULL').run(now, userId);
+    this.db.prepare('INSERT INTO reset_tokens (token_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)').run(hashToken(token), userId, now, now + ttlMs);
+    return token;
+  }
+  /** 'valid', 'used', 'expired' or 'unknown'. Looks only; does not use the token up. */
+  resetTokenStatus(token, now = Date.now()) {
+    if (typeof token !== 'string' || !token) return 'unknown';
+    const r = this.db.prepare('SELECT used_at, expires_at FROM reset_tokens WHERE token_hash = ?').get(hashToken(token));
+    if (!r) return 'unknown';
+    if (r.used_at !== null) return 'used';
+    return r.expires_at < now ? 'expired' : 'valid';
+  }
+  /** Use the token up and return the user id, or null if it is unknown, used or expired. One statement, so two requests cannot both win. */
+  consumeResetToken(token, now = Date.now()) {
+    if (typeof token !== 'string' || !token) return null;
+    const r = this.db.prepare('UPDATE reset_tokens SET used_at = ? WHERE token_hash = ? AND used_at IS NULL AND expires_at >= ? RETURNING user_id').get(now, hashToken(token), now);
+    return r ? Number(r.user_id) : null;
+  }
+  /** Set a new password and end every session of the account. */
+  setPassword(userId, pwHash) {
+    this.db.prepare('UPDATE users SET pw_hash = ? WHERE id = ?').run(pwHash, userId);
+    this.deleteSessionsFor(userId);
+  }
+  /** Whether the user wants the "your workspace finished" message (the default). */
+  mailNotices(userId) {
+    return this.db.prepare('SELECT mail_notices FROM users WHERE id = ?').get(userId)?.mail_notices === 1;
+  }
+  setMailNotices(userId, on) {
+    return this.db.prepare('UPDATE users SET mail_notices = ? WHERE id = ?').run(on ? 1 : 0, userId).changes > 0;
   }
 }

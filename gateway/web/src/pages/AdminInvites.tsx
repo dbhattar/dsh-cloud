@@ -48,6 +48,8 @@ export function InvitesPage({ csrf }: { csrf: string }) {
   const [note, setNote] = useState('');
   const [days, setDays] = useState('7');
   const [count, setCount] = useState('1');
+  const [email, setEmail] = useState('');
+  const [mailEnabled, setMailEnabled] = useState(false);
   const [creating, setCreating] = useState(false);
   const [created, setCreated] = useState<Created[] | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -55,7 +57,7 @@ export function InvitesPage({ csrf }: { csrf: string }) {
 
   const load = useCallback(() => {
     fetch('/gw/admin/api/invites').then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status))))).then(
-      (d: { invites: Invite[] }) => setInvites(d.invites),
+      (d: { invites: Invite[]; mailEnabled?: boolean }) => { setInvites(d.invites); setMailEnabled(Boolean(d.mailEnabled)); },
       () => setFailed(true),
     );
   }, []);
@@ -71,8 +73,17 @@ export function InvitesPage({ csrf }: { csrf: string }) {
     setCreating(true);
     setMessage(null);
     try {
-      const out = await post('/gw/admin/api/invites', { note, days: Number(days), count: Number(count) });
-      if (out.ok) { setCreated(out.data.created as Created[]); setInvites(out.data.invites as Invite[]); setNote(''); }
+      const out = await post('/gw/admin/api/invites', { note, days: Number(days), count: email.trim() ? 1 : Number(count), email: email.trim() || undefined });
+      if (out.ok) {
+        setCreated(out.data.created as Created[]); setInvites(out.data.invites as Invite[]); setNote('');
+        const sent = out.data.emailed as { queued: boolean; reason?: string } | null;
+        if (sent) {
+          setMessage(sent.queued
+            ? { kind: 'ok', text: `The invite is on its way to ${email.trim()}. The link is below too; the outcome is in the audit log (mail.sent or mail.failed).` }
+            : { kind: 'error', text: `The invite was created but not mailed (${sent.reason === 'rate_limited' ? 'too many messages to that address or in this hour' : 'the mail queue is full'}). Copy the link below and send it yourself.` });
+          setEmail('');
+        }
+      }
       else setMessage({ kind: 'error', text: out.data?.message ?? `That did not work (${out.status}).` });
     } catch {
       setMessage({ kind: 'error', text: 'Could not reach the gateway. Try again.' });
@@ -101,7 +112,8 @@ export function InvitesPage({ csrf }: { csrf: string }) {
       <form className={styles.inviteForm} onSubmit={(e) => void create(e)}>
         <label>Note (who it is for)<input className={styles.input} value={note} onChange={(e) => setNote(e.target.value)} maxLength={100} placeholder="optional" /></label>
         <label>Expires in (days, 0 = never)<input className={styles.input} type="number" min={0} max={365} value={days} onChange={(e) => setDays(e.target.value)} /></label>
-        <label>How many<input className={styles.input} type="number" min={1} max={20} value={count} onChange={(e) => setCount(e.target.value)} /></label>
+        <label>How many<input className={styles.input} type="number" min={1} max={20} value={email.trim() ? 1 : count} disabled={Boolean(email.trim())} onChange={(e) => setCount(e.target.value)} /></label>
+        {mailEnabled && <label>Email it to (optional)<input className={styles.input} type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="name@example.com" autoComplete="off" /></label>}
         <button type="submit" className={styles.smallButton} disabled={creating}>{creating ? 'Creating…' : 'Create invite links'}</button>
       </form>
 

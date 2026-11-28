@@ -21,6 +21,8 @@ setInterval(() => {
   if (cfg.auditRetentionDays) store.purgeAudit(Date.now() - cfg.auditRetentionDays * 86400000);
 }, 3600 * 1000).unref();
 
-createGateway({ cfg, store, manager, log, audit }).listen(cfg.port, '0.0.0.0', () => {
-  log(`gateway listening on :${cfg.port}, public ${cfg.publicUrl}, signup=${cfg.allowSignup}`);
+const server = createGateway({ cfg, store, manager, log, audit });
+manager.onAgentFinished = (userId) => server.mail.taskFinished(userId);
+server.listen(cfg.port, '0.0.0.0', () => {
+  log(`gateway listening on :${cfg.port}, public ${cfg.publicUrl}, signup=${cfg.allowSignup}, mail=${cfg.mail.provider}`);
 });

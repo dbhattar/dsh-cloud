@@ -599,12 +599,23 @@ export class SandboxManager {
         }
         by = 'busy_cap';
       }
-      this.keptBusy.delete(userId);
+      const wasBusy = this.keptBusy.delete(userId);
       try {
         await this.stop(userId, by);
+        // The agent was kept running for the user while they were away and has gone quiet: a hook for "your task finished".
+        if (wasBusy && by === 'idle') this.#agentFinished(userId);
       } catch (e) {
         this.log(`reap ${userId}: ${e.message}`);
       }
+    }
+  }
+
+  /** Tell whoever listens (the gateway's mail) that a kept-busy agent finished. Never lets a listener's failure reach the reaper. */
+  #agentFinished(userId) {
+    try {
+      this.onAgentFinished?.(userId);
+    } catch (e) {
+      this.log(`agent-finished listener: ${e.message}`);
     }
   }
 

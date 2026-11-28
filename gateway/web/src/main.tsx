@@ -5,6 +5,7 @@ import { Admin } from './pages/Admin.tsx';
 import { Feedback } from './pages/Feedback.tsx';
 import { Launching } from './pages/Launching.tsx';
 import { Login } from './pages/Login.tsx';
+import { Forgot, Notice, Reset, Waitlist } from './pages/Recovery.tsx';
 import { Shell } from './pages/Shell.tsx';
 import './styles/base.css';
 import './styles/design-platform.css';
@@ -26,6 +27,10 @@ if (boot.page !== 'launching' && boot.page !== 'shell' && boot.page !== 'feedbac
 function App() {
   switch (boot.page) {
     case 'login': return <Login {...boot} />;
+    case 'forgot': return <Forgot {...boot} />;
+    case 'reset': return <Reset {...boot} />;
+    case 'waitlist': return <Waitlist {...boot} />;
+    case 'notice': return <Notice {...boot} />;
     case 'feedback': return <Feedback {...boot} />;
     case 'launching': return <Launching {...boot} />;
     case 'shell': return <Shell {...boot} />;

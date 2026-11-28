@@ -1,4 +1,5 @@
 import { parseSpan } from './audit.js';
+import { normalizeEmail } from './auth.js';
 
 /**
  * The admin pages for invites, feedback and the audit log (P5-14). What an admin sees: invite status (never a stored code: only
@@ -40,22 +41,28 @@ export function csvCell(value) {
   return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
-export function createRecordsApi({ store, cfg, audit, now = () => Date.now() }) {
+export function createRecordsApi({ store, cfg, audit, mail = null, now = () => Date.now() }) {
   const invites = {
-    list: () => ({ invites: store.listInvites(now()).reverse(), signupUrl: new URL('gw/signup', cfg.publicUrl).href }),
+    list: () => ({ invites: store.listInvites(now()).reverse(), signupUrl: new URL('gw/signup', cfg.publicUrl).href, mailEnabled: Boolean(mail?.enabled) }),
 
     /** Create invites; the codes are in this answer and nowhere else. */
-    create({ note, days, count, admin, ip }) {
+    create({ note, days, count, email, admin, ip }) {
       const n = count === undefined ? 1 : Number(count);
       const d = days === undefined || days === '' ? 0 : Number(days);
       const text = typeof note === 'string' ? note.trim() : '';
       if (!Number.isInteger(n) || n < 1 || n > MAX_PER_REQUEST) return { status: 400, json: { error: 'bad_count', message: `Create between 1 and ${MAX_PER_REQUEST} invites at a time.` } };
       if (!Number.isInteger(d) || d < 0 || d > 365) return { status: 400, json: { error: 'bad_days', message: 'Days until it expires must be 0 (never) to 365.' } };
       if (text.length > NOTE_MAX) return { status: 400, json: { error: 'bad_note', message: `The note can be at most ${NOTE_MAX} characters.` } };
+      // With an address, the one invite is also mailed. Checked before anything is created, so a refusal leaves no stray invite.
+      const to = email === undefined || email === '' ? null : normalizeEmail(email);
+      if (email !== undefined && email !== '' && !to) return { status: 400, json: { error: 'bad_email', message: 'That email address does not look right.' } };
+      if (to && n !== 1) return { status: 400, json: { error: 'bad_count', message: 'An invite is mailed to one address at a time.' } };
+      if (to && !mail?.enabled) return { status: 400, json: { error: 'mail_off', message: 'Email is not set up on this server (MAIL_PROVIDER), so the invite cannot be mailed. Create it without an address and copy the link.' } };
       const base = new URL('gw/signup', cfg.publicUrl).href;
       const codes = Array.from({ length: n }, () => store.createInvite({ note: text, ttlDays: d, createdBy: admin.id }, now()));
-      audit.record('admin.invite_create', { ip, by: admin.id, count: n, note: text, days: d, via: 'panel' });
-      return { status: 201, json: { created: codes.map((code) => ({ code, link: `${base}?invite=${encodeURIComponent(code)}` })), ...invites.list() } };
+      const emailed = to ? mail.invite({ email: to, code: codes[0], days: d }) : null;
+      audit.record('admin.invite_create', { ip, by: admin.id, count: n, note: text, days: d, via: 'panel', emailed: emailed ? emailed.queued : undefined });
+      return { status: 201, json: { emailed, created: codes.map((code) => ({ code, link: `${base}?invite=${encodeURIComponent(code)}` })), ...invites.list() } };
     },
 
     revoke({ ref, admin, ip }) {
@@ -105,5 +112,32 @@ export function createRecordsApi({ store, cfg, audit, now = () => Date.now() }) 
     },
   };
 
-  return { invites, feedback, audit: auditLog, ids };
+  /** The waitlist (docs/email.md): who asked, who confirmed their address, and inviting someone by email. */
+  const waitlist = {
+    list: () => ({ entries: store.listWaitlist(), mailEnabled: Boolean(mail?.enabled) }),
+
+    /** Create one invite for a confirmed entry and mail it. The entry is marked invited only when the message was accepted for sending. */
+    invite({ email, days, admin, ip }) {
+      const to = normalizeEmail(email);
+      const entry = to ? store.waitlistEntry(to) : null;
+      const d = days === undefined || days === '' ? 7 : Number(days);
+      if (!entry) return { status: 404, json: { error: 'not_found', message: 'That address is not on the waitlist.' } };
+      if (!Number.isInteger(d) || d < 0 || d > 365) return { status: 400, json: { error: 'bad_days', message: 'Days until it expires must be 0 (never) to 365.' } };
+      if (!mail?.enabled) return { status: 400, json: { error: 'mail_off', message: 'Email is not set up on this server (MAIL_PROVIDER), so the invite cannot be mailed.' } };
+      if (!entry.confirmedAt) return { status: 409, json: { error: 'not_confirmed', message: 'They have not confirmed their address yet, so no invitation is sent to it.' } };
+      const code = store.createInvite({ note: 'waitlist', ttlDays: d, createdBy: admin.id }, now());
+      const sent = mail.invite({ email: to, code, days: d });
+      if (sent.queued) store.markWaitlistInvited(to, now());
+      audit.record('admin.waitlist_invite', { ip, by: admin.id, days: d, queued: sent.queued, reason: sent.reason });
+      return { status: 200, json: { sent, ...waitlist.list() } };
+    },
+
+    remove({ email, admin, ip }) {
+      const to = normalizeEmail(email);
+      if (!to || !store.removeFromWaitlist(to)) return { status: 404, json: { error: 'not_found', message: 'That address is not on the waitlist.' } };
+      audit.record('admin.waitlist_remove', { ip, by: admin.id });
+      return { status: 200, json: waitlist.list() };
+    },
+  };
+  return { invites, feedback, audit: auditLog, ids, waitlist };
 }
