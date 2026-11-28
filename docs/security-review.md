@@ -26,21 +26,21 @@ Many features were added one at a time (phases 1 to 6, email, waitlist, waiting 
 
 ## P0: fix before any public exposure
 
-### SEC-01. One malformed request kills the gateway or the llm-proxy (**Reproduced**)
+### SEC-01. One malformed request kills the gateway or the llm-proxy (**Reproduced; fixed** in the crash-hardening change, see "Fixes made")
 
 - **Where:** `gateway/src/server.js:385` (`async function handle`: `const path = new URL(req.url, 'http://x').pathname;` runs *before* the `try`), `llm-proxy/src/server.js:114, 278, 298`, `runner/src/server.js:138` (same pattern; not reproduced there), `gateway/src/server.js:123, 309, 370`, `gateway/src/admin.js:146` (parse inside handlers, partly guarded).
 - **Reproduction (2026-11-28, local, no Docker):** the gateway and the llm-proxy were each started in a scratch script and sent the request line `GET //[ HTTP/1.1`. Both processes **exited** with an unhandled `ERR_INVALID_URL` from the `new URL(...)` call. A request to `/healthz` before it was answered normally.
 - **Attack:** any sandbox can connect to `gateway:8080` and `llm-proxy:8081` directly (SEC-04) and send that line. Behind Caddy the gateway is probably protected (Go's HTTP server is expected to reject such a target; **not checked**), but the sandbox path does not go through Caddy. Nothing restarts either service (SEC-03), so all users lose the service until someone restarts the stack.
 - **Fix:** parse the URL inside the `try` (or with a wrapper that answers 400), in every service; add a process-level guard (SEC-03); add the request line as a test for each service (the proxies' abuse tests had no such case, the same gap as in [finding-egress-proxy-crash.md](finding-egress-proxy-crash.md)).
 
-### SEC-02. A web server can crash the egress proxy by answering with an odd status code (**Reproduced**)
+### SEC-02. A web server can crash the egress proxy by answering with an odd status code (**Reproduced; fixed**)
 
 - **Where:** `egress-proxy/src/server.js:81-86`: `res.writeHead(r.statusCode, rh)` inside the upstream response callback, with no `try`.
 - **Reproduction:** a raw TCP server answering `HTTP/1.1 099 nope` was reached through the egress proxy (address filter switched off for the loopback test, as the existing unit tests do). The proxy process **exited** with `ERR_HTTP_INVALID_STATUS_CODE`.
 - **Attack:** a user hosts a public server that answers a status below 100, and requests it through the proxy. In open mode any host works; in scoped mode any allowed host where users can publish content works. Everyone's web access stops until restart. Same class as the reset bug already fixed.
 - **Fix:** wrap the callback body in `try`/`catch`; answer 502 and destroy the upstream request when the status is outside 100 to 599; add a test that serves such a status.
 
-### SEC-03. No guard against a single unhandled error, and nothing restarts a stopped service (**Confirmed in code**)
+### SEC-03. No guard against a single unhandled error, and nothing restarts a stopped service (**Confirmed in code; the upgrade crash reproduced by test; fixed**)
 
 - **Where:** `infra/docker-compose.gateway.yml` has no `restart:` on gateway, runner, llm-proxy, egress-proxy or Caddy (the one `restart: "no"` is the build-only image); no `process.on('uncaughtException' | 'unhandledRejection')` anywhere in `gateway/`, `runner/`, `llm-proxy/`, `egress-proxy/`.
 - **A second instance of the same bug:** `gateway/src/server.js` `handleUpgrade` awaits `manager.ensure(user.id)` **before** `proxyUpgrade` attaches `socket.on('error', ...)` (`gateway/src/proxy.js:58-59`). A signed-in user opens a WebSocket while their sandbox is stopped or queued (the wait can be 90 s start time plus up to 600 s in the waiting room), then resets the connection: the socket emits `error` with no listener and the gateway exits. Reachable through Caddy. (Code path confirmed; the crash itself was not reproduced.)
@@ -64,6 +64,21 @@ Many features were added one at a time (phases 1 to 6, email, waitlist, waiting 
 - **Where:** `gateway/src/auth.js:13, 24` (`scryptSync` on the main thread), `gateway/src/server.js:153` (the login limiter is keyed on `ip|email`).
 - **Attack:** an anonymous client posts logins with a new email each time: every key is fresh, none is limited, and each costs tens of milliseconds of the single thread. A few requests per second keep the event loop busy and stall every user's traffic, WebSocket handshakes and the admin panel. The same pattern allows password spraying (10 tries per email per 15 minutes, across all emails). The scrypt time was not measured.
 - **Fix:** async `crypto.scrypt` with a small concurrency limit and a bounded queue (503 when full); a per-IP limiter that ignores the email; a per-account failure counter; a global rate limit in Caddy. Only after hashing is off the main thread, raise the work factor.
+
+## Fixes made
+
+### SEC-01, 02, 03: crash hardening (branch `fix/crash-hardening`)
+
+- **Request targets:** the gateway, the llm-proxy (user and admin port) and the runner parse the request target inside their error guard and answer **400** for one that is not a valid URL. Behind it, every later `new URL(req.url, ...)` on the same string cannot throw.
+- **Egress proxy:** the upstream response callback is guarded; a status outside what Node can relay (for example `099` or `000`) is answered **502**, logged as `deny ... invalid upstream response`, and the upstream request is destroyed. A normal answer is relayed as before.
+- **Upgrade sockets:** `handleUpgrade` attaches its `'error'` listener **first**, before waiting for the sandbox, and stops if the client left while it waited. The crash was reproduced by test: with only that line removed, the test fails (a client reset during the wait ended the test process).
+- **Last resort:** each service's `index.js` logs `fatal <event>: <stack>` and exits 1 on any unhandled error or rejection. It deliberately does **not** keep serving, because the state after such an error is unknown; the restart policy brings the service back.
+- **Restart and health:** `restart: unless-stopped` on gateway, sandbox-runner, llm-proxy, egress-proxy and Caddy, and a gateway healthcheck against `/gw/healthz` (a gateway that stops answering is reported unhealthy).
+- **Tests (each fails without its fix, checked):** `tests/gateway/crash-hardening.test.mjs` (invalid targets answer 400 and the gateway keeps serving; a reset during an upgrade wait; restart policies and healthcheck in the compose file; the last-resort handlers), `tests/llm-proxy/crash-hardening.test.mjs`, `tests/runner/crash-hardening.test.mjs`, `tests/egress-proxy/crash-hardening.test.mjs` (status `099` and `000`, and that a normal answer still passes). `tests/run.sh unit` passes: 409 tests, including these 8.
+- **Checked live** (Lima VM, your running stack rebuilt with `scripts/restart.sh`, data kept): the bad request line sent from inside the Docker network, as a sandbox could, to `gateway:8080`, `llm-proxy:8081` and `egress-proxy:3128` gets **400 Bad Request** from each and all stay up; the five services show `unless-stopped`; the gateway reports healthy; and a throwaway container using the same restart policy and the egress-proxy's own image, whose process exits with code 1 every 1.2 s, was restarted repeatedly (5 times in 9 s).
+- **A mistake in my own check, worth recording:** I first tested the policy with `docker kill` and the services did **not** come back. That is Docker's documented behaviour, not a failure: `docker kill` and `docker stop` count as a manual stop, which `unless-stopped` respects on purpose (so an operator's stop survives a reboot). A crash of the process itself, or a reboot, is what the policy covers. I had stopped your llm-proxy and egress proxy with that test and started them again by hand; they were down for under a minute.
+- **Not verified:** that the 400 for an invalid target also holds through Caddy (the sandbox path does not go through it, and that is the one that mattered); the restart after a real host reboot; the final health of the Caddy container (it has no healthcheck).
+- **Still open from the same finding:** the other places a raw socket could be handed to a handler without an early error listener were read (`gateway/src/proxy.js` has them after the sandbox answers) but not each tested; the egress proxy's CONNECT path was fixed earlier ([finding-egress-proxy-crash.md](finding-egress-proxy-crash.md)).
 
 ## P1: before opening sign-ups
 

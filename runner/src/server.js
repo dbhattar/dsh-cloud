@@ -135,7 +135,12 @@ export function createRunner({ cfg, docker, log = console.log, networks = new Ne
   }
 
   return http.createServer(async (req, res) => {
-    const url = new URL(req.url, 'http://x');
+    let url;
+    try {
+      url = new URL(req.url, 'http://x'); // inside the guard: an invalid target must be a 400, not the end of the process
+    } catch {
+      return json(res, 400, { error: 'bad request' });
+    }
     try {
       if (url.pathname === '/healthz') return json(res, 200, { ok: true });
       if (!authorized(req, cfg.secret)) throw new HttpError(401, 'unauthorized');
