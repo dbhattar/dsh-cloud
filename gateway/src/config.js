@@ -37,6 +37,12 @@ export function loadConfig(env = process.env) {
     // Capacity and abuse limits; 0 turns each off.
     maxRunningSandboxes: int('MAX_RUNNING_SANDBOXES', 0),
     evictAfterIdleSeconds: int('EVICT_AFTER_IDLE_SECONDS', 300), // when full, only sandboxes idle this long may be stopped for a newcomer
+    // The waiting room: when full and nothing can be stopped, a newcomer waits in line up to this long and is started as a place
+    // frees, instead of being refused. 0 = refuse at once (the old behaviour). Only the first MAX_WAITING are admitted to the line.
+    waitQueueSeconds: int('WAIT_QUEUE_SECONDS', 600),
+    maxWaiting: int('MAX_WAITING', 50),
+    waitPollMs: int('WAIT_POLL_MS', 2000), // how often the first in line looks for a free place (a stop wakes it sooner)
+    waitAbandonSeconds: int('WAIT_ABANDON_SECONDS', 30), // someone whose page stopped asking for this long leaves the line
     // A sandbox whose agent is busy (recent model calls, or CPU use) is not stopped for being idle while the browser is
     // closed, for up to this long since the user's last activity. 0 turns the feature off (idle sandboxes stop as before).
     maxBusySeconds: int('MAX_BUSY_SECONDS', 0),

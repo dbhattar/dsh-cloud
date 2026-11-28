@@ -30,6 +30,10 @@ export class SandboxManager {
     this.sockets = new Map(); // userId -> open upgraded connections
     this.held = new Map(); // userId -> why a limit stopped them; only an explicit start (the launching page) clears it
     this.admission = Promise.resolve(); // serialises the capacity check with the start that follows it
+    this.admitting = []; // the waiting room: starts in line for the capacity check, oldest first (see #admit)
+    this.wakeWaiter = null; // set while the first in line sleeps between checks; a stop wakes it at once
+    this.sweepTimer = null;
+    this.lineOpen = false; // true from the first newcomer who finds the service full until the waiting room is empty again
     this.lastDiskCheck = 0;
     this.cpuSample = new Map(); // userId -> { ns, at } previous CPU reading, to compute use between reaps
     this.lastBusy = new Map(); // userId -> { at, signal } last time the agent looked busy
@@ -148,6 +152,7 @@ export class SandboxManager {
       error: this.errors.get(userId), // the raw message: technical details and support, not for the main text
       problem: this.state(userId) === 'error' ? this.#problem(userId) : null,
       notice: ['starting', 'stopped'].includes(this.state(userId)) ? this.#notice(userId) : null,
+      queue: this.#queueView(userId),
     };
   }
 
@@ -196,10 +201,15 @@ export class SandboxManager {
           return entry;
         })
         .catch((e) => {
+          if (e instanceof SandboxProblem && e.code === 'queue_left') {
+            // The person stopped looking while waiting; there is nothing to show them as an error when they come back.
+            this.audit.record('sandbox.queue_left', { userId, waitedSeconds: e.params.waitedSeconds });
+            throw e;
+          }
           this.errors.set(userId, e.message);
           this.problems.set(userId, e instanceof SandboxProblem ? { code: e.code, params: e.params } : { code: classifyFailure(e.message), params: {} });
           this.log(`sandbox ${userId} failed to start: ${e.message}`);
-          if (/at capacity/.test(e.message)) this.audit.record('sandbox.refused', { userId, reason: 'capacity' });
+          if (/at capacity/.test(e.message)) this.audit.record('sandbox.refused', { userId, reason: e.params?.queueFull ? 'queue_full' : e.params && 'waitedSeconds' in e.params ? 'queue_timeout' : 'capacity', waitedSeconds: e.params?.waitedSeconds });
           else this.audit.record('sandbox.start_failed', { userId, error: e.message.slice(0, 300) });
           throw e;
         })
@@ -280,29 +290,113 @@ export class SandboxManager {
 
   /**
    * Run `start` only if there is room. Checks and starts are serialised so two newcomers cannot both take the
-   * last slot. A sandbox that is already running never counts against itself. When full, the longest-idle
-   * sandbox (no open sockets, idle for at least evictAfterIdleSeconds) is stopped to make room; otherwise the
-   * start fails with an "at capacity" message.
+   * last slot, and in the order they arrived. A sandbox that is already running never counts against itself.
+   * When full, the longest-idle sandbox (no open sockets, idle for at least evictAfterIdleSeconds) is stopped to make
+   * room. Otherwise the newcomer waits in line (the waiting room, WAIT_QUEUE_SECONDS) and is started as soon as a place is
+   * free, instead of being refused; with WAIT_QUEUE_SECONDS=0 the start fails at once with an "at capacity" message.
+   * The first in line checks again every waitPollMs and whenever a sandbox stops; the rest wait behind it. Someone who
+   * stops looking (no status request for waitAbandonSeconds) leaves the line, and nobody waits longer than the limit.
    */
   #admit(userId, start) {
     const max = this.cfg.maxRunningSandboxes;
     if (!max) return start();
+    const waitMs = (this.cfg.waitQueueSeconds ?? 0) * 1000;
+    const now = Date.now();
+    if (waitMs > 0 && this.lineOpen && this.admitting.length >= (this.cfg.maxWaiting ?? 50)) {
+      throw new SandboxProblem('capacity', { queueFull: true }, 'the service is at capacity right now; try again in a few minutes');
+    }
+    const entry = { userId, joinedAt: now, seen: now, blocked: false, cancelled: false, admitted: false, timer: null };
+    this.admitting.push(entry);
+    const cancelled = new Promise((_, reject) => {
+      entry.cancel = (err) => {
+        if (entry.admitted || entry.cancelled) return;
+        entry.cancelled = true;
+        this.#leave(entry);
+        this.wakeWaiter?.(); // if it was the first in line, the next one need not wait for the sleep to end
+        reject(err);
+      };
+    });
+    cancelled.catch(() => {}); // the race below consumes it; this keeps an unobserved rejection from being reported
+    if (waitMs > 0) {
+      entry.timer = setTimeout(() => entry.cancel(new SandboxProblem('capacity', { waitedSeconds: Math.round((Date.now() - entry.joinedAt) / 1000) }, 'the service is at capacity right now; try again in a few minutes')), waitMs);
+      entry.timer.unref?.();
+      this.#sweepOn();
+    }
     const run = this.admission.then(async () => {
-      const others = (await this.runner.list()).filter((s) => s.running && s.userId !== userId);
-      if (others.length >= max) {
-        const minIdle = (this.cfg.evictAfterIdleSeconds ?? 300) * 1000;
-        const victim = others
-          .filter((s) => !this.inflight.has(s.userId) && (this.sockets.get(s.userId) ?? 0) === 0 && !this.isBusy(s.userId) && Date.now() - (this.lastSeen.get(s.userId) ?? 0) >= minIdle)
-          .sort((a, b) => (this.lastSeen.get(a.userId) ?? 0) - (this.lastSeen.get(b.userId) ?? 0))[0];
-        if (!victim) throw new SandboxProblem('capacity', {}, 'the service is at capacity right now; try again in a few minutes');
-        this.log(`at capacity (${others.length}/${max}): stopping idle sandbox ${victim.userId} to make room for ${userId}`);
-        await this.stop(victim.userId, 'evicted');
-        this.audit.record('sandbox.evicted', { userId: victim.userId, forUser: userId });
+      try {
+        if (entry.cancelled) return;
+        await this.#waitForRoom(entry, max);
+        if (entry.cancelled) return;
+        entry.admitted = true;
+        if (entry.blocked) this.audit.record('sandbox.dequeued', { userId, waitedSeconds: Math.round((Date.now() - entry.joinedAt) / 1000) });
+        await start();
+      } finally {
+        this.#leave(entry);
       }
-      await start();
     });
     this.admission = run.catch(() => {}); // a failed admission must not block the next one
-    return run;
+    return Promise.race([run, cancelled]);
+  }
+
+  /** Resolves when there is room (stopping an idle sandbox to make some if that is allowed); throws at once when waiting is off. */
+  async #waitForRoom(entry, max) {
+    for (;;) {
+      const others = (await this.runner.list()).filter((s) => s.running && s.userId !== entry.userId);
+      if (others.length < max) return;
+      const minIdle = (this.cfg.evictAfterIdleSeconds ?? 300) * 1000;
+      const victim = others
+        .filter((s) => !this.inflight.has(s.userId) && (this.sockets.get(s.userId) ?? 0) === 0 && !this.isBusy(s.userId) && Date.now() - (this.lastSeen.get(s.userId) ?? 0) >= minIdle)
+        .sort((a, b) => (this.lastSeen.get(a.userId) ?? 0) - (this.lastSeen.get(b.userId) ?? 0))[0];
+      if (victim) {
+        this.log(`at capacity (${others.length}/${max}): stopping idle sandbox ${victim.userId} to make room for ${entry.userId}`);
+        await this.stop(victim.userId, 'evicted');
+        this.audit.record('sandbox.evicted', { userId: victim.userId, forUser: entry.userId });
+        return;
+      }
+      if (!(this.cfg.waitQueueSeconds > 0)) throw new SandboxProblem('capacity', {}, 'the service is at capacity right now; try again in a few minutes');
+      if (!entry.blocked) {
+        entry.blocked = true;
+        this.lineOpen = true;
+        this.audit.record('sandbox.queued', { userId: entry.userId, position: this.admitting.indexOf(entry) + 1, total: this.admitting.length });
+      }
+      await new Promise((resolve) => {
+        const t = setTimeout(resolve, this.cfg.waitPollMs ?? 2000);
+        t.unref?.();
+        this.wakeWaiter = () => { clearTimeout(t); resolve(); };
+      });
+      this.wakeWaiter = null;
+      if (entry.cancelled) return;
+    }
+  }
+
+  #leave(entry) {
+    clearTimeout(entry.timer);
+    const i = this.admitting.indexOf(entry);
+    if (i >= 0) this.admitting.splice(i, 1);
+    if (!this.admitting.length) { clearInterval(this.sweepTimer); this.sweepTimer = null; this.lineOpen = false; }
+  }
+
+  /** While anyone is in line, drop those who stopped looking: the status page they have open polls every second or so. */
+  #sweepOn() {
+    if (this.sweepTimer) return;
+    const abandonMs = (this.cfg.waitAbandonSeconds ?? 30) * 1000;
+    this.sweepTimer = setInterval(() => {
+      if (!this.lineOpen) return;
+      for (const e of [...this.admitting]) {
+        if (Date.now() - e.seen > abandonMs) e.cancel(new SandboxProblem('queue_left', { waitedSeconds: Math.round((Date.now() - e.joinedAt) / 1000) }, 'left the waiting line'));
+      }
+    }, Math.min(5000, Math.max(100, abandonMs / 2)));
+    this.sweepTimer.unref?.();
+  }
+
+  /** Where this user stands, for the launching page; null unless there is a line and they are in it. Asking counts as still being there. */
+  #queueView(userId) {
+    const i = this.admitting.findIndex((e) => e.userId === userId);
+    if (i < 0) return null;
+    const e = this.admitting[i];
+    e.seen = Date.now();
+    if (!this.lineOpen) return null; // everyone is only being checked in turn, and there is room: no line
+    return { position: i + 1, total: this.admitting.length, waitedSeconds: Math.round((Date.now() - e.joinedAt) / 1000), maxSeconds: this.cfg.waitQueueSeconds };
   }
 
   /** Stop a sandbox because of a limit and keep it stopped until the user starts it again on purpose. */
@@ -382,6 +476,7 @@ export class SandboxManager {
     this.audit.record('sandbox.stop', { userId, by });
     if (noticeFor(by, this.cfg)) this.lastStop.set(userId, { by }); else this.lastStop.delete(userId);
     this.log(`sandbox ${userId} stopped`);
+    this.wakeWaiter?.(); // a place may be free: let the first in line look now instead of at its next check
   }
 
   /**

@@ -29,6 +29,7 @@ const ENV = {
   RATE_LIMIT_PER_MINUTE: '600',
   MAX_RUNNING_SANDBOXES: '1',
   EVICT_AFTER_IDLE_SECONDS: '100000', // never evict: the second user must be refused
+  WAIT_QUEUE_SECONDS: '0', // and not queued either: this suite tests the refusal (the waiting room is tests/phase5/waiting-room.test.mjs)
   MAX_DISK_MB: '1',
   DISK_CHECK_SECONDS: '15',
   REAP_INTERVAL_SECONDS: '5',

@@ -33,10 +33,12 @@ const NONE = { kind: 'none', label: '' };
 
 /** code -> (params, cfg) -> { severity, title, message, action }. Severity: info, warning or error. */
 const PROBLEMS = {
-  capacity: () => ({
+  capacity: (p = {}) => ({
     severity: 'warning',
     title: 'The service is busy right now',
-    message: 'All workspace slots are in use. Nothing is wrong with your account or your files. Try again in a few minutes.',
+    message: p.waitedSeconds >= 60
+      ? `All workspace slots are in use, and none opened in the ${spanText(p.waitedSeconds)} you waited. Nothing is wrong with your account or your files. Try again in a few minutes.`
+      : 'All workspace slots are in use. Nothing is wrong with your account or your files. Try again in a few minutes.',
     action: RETRY,
   }),
   stopped_run_time: (p, cfg) => ({

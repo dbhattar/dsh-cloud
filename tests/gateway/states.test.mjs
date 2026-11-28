@@ -112,8 +112,8 @@ test('status: a failed start carries the designed state and keeps the raw messag
   await retry;
 });
 
-test('status: a typed capacity refusal is the capacity state', async () => {
-  const m = new SandboxManager({ runner: fakeRunner(), cfg: { ...cfg, maxRunningSandboxes: 1, evictAfterIdleSeconds: 99999 }, log: () => {} });
+test('status: a typed capacity refusal (waiting room off) is the capacity state', async () => {
+  const m = new SandboxManager({ runner: fakeRunner(), cfg: { ...cfg, maxRunningSandboxes: 1, evictAfterIdleSeconds: 99999, waitQueueSeconds: 0 }, log: () => {} });
   m.runner.list = async () => [{ userId: 9, running: true }];
   m.runner.info = async (id) => (id === 2 ? { running: false, startedAt: null, llmManaged: true } : null);
   m.lastSeen.set(9, Date.now());

@@ -7,7 +7,8 @@ import styles from './Launching.module.css';
 /** A designed state from the gateway (gateway/src/states.js): the text is already plain language. */
 interface Problem { code: string; severity: 'info' | 'warning' | 'error'; title: string; message: string; action: { kind: 'retry' | 'restart' | 'none'; label: string } }
 interface Notice { code: string; severity: 'info'; message: string }
-interface Status { state: 'running' | 'stopped' | 'error' | string; error?: string; problem?: Problem | null; notice?: Notice | null; resumed?: boolean; stage: number; elapsedMs: number }
+interface Queue { position: number; total: number; waitedSeconds: number; maxSeconds: number }
+interface Status { state: 'running' | 'stopped' | 'error' | string; queue?: Queue | null; error?: string; problem?: Problem | null; notice?: Notice | null; resumed?: boolean; stage: number; elapsedMs: number }
 
 interface View {
   title: string;
@@ -18,6 +19,9 @@ interface View {
   net: string;
   error: { problem: Problem; detail: string } | null;
 }
+
+/** 75 -> "1 min 15 s", 40 -> "40 s". */
+const span = (s: number) => (s < 60 ? `${s} s` : `${Math.floor(s / 60)} min${s % 60 ? ` ${s % 60} s` : ''}`);
 
 const INITIAL: View = { title: 'Starting your workspace', sub: 'Checking on your sandbox…', stage: 0, allDone: false, meta: '', net: '', error: null };
 
@@ -71,6 +75,18 @@ export function Launching({ stages }: { stages: string[] }) {
           return;
         }
         if (j.state === 'stopped') { patch({ sub: j.notice?.message ?? 'Waking up your workspace…' }); start(); return; }
+        if (j.queue) {
+          // The waiting room: the service is full. Asking for the status is what keeps this person's place in line.
+          const q = j.queue;
+          patch({
+            title: 'Waiting for a place',
+            sub: `You are number ${q.position} of ${q.total} in line. Your workspace starts by itself as soon as a place is free. Keep this page open.`,
+            stage: 1,
+            meta: `Waiting ${span(q.waitedSeconds)} · we stop waiting after ${span(q.maxSeconds)}`,
+          });
+          later(() => void poll(), 1500);
+          return;
+        }
         const s = Math.round(j.elapsedMs / 1000);
         patch({
           title: j.resumed ? 'Resuming your workspace' : 'Setting up your workspace',

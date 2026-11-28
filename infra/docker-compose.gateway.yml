@@ -57,6 +57,11 @@ services:
       MAIL_TASK_NOTICES: ${MAIL_TASK_NOTICES:-true}
       MAIL_TASK_NOTICE_HOURS: ${MAIL_TASK_NOTICE_HOURS:-6}
       EVICT_AFTER_IDLE_SECONDS: ${EVICT_AFTER_IDLE_SECONDS:-300} # when full, sandboxes idle this long may be stopped for a newcomer
+      # The waiting room (docs/plan-phase-5.md, P5-9): when full and nothing can be stopped, a newcomer waits in line.
+      WAIT_QUEUE_SECONDS: ${WAIT_QUEUE_SECONDS:-600} # longest wait; 0 = refuse at once
+      MAX_WAITING: ${MAX_WAITING:-50} # people allowed in line; more are refused
+      WAIT_POLL_MS: ${WAIT_POLL_MS:-2000}
+      WAIT_ABANDON_SECONDS: ${WAIT_ABANDON_SECONDS:-30} # someone whose page stopped asking this long leaves the line
       LLM_ADMIN_SOCKET: /run/llm-admin/admin.sock
       LLM_ADMIN_SECRET: ${LLM_ADMIN_SECRET:?set LLM_ADMIN_SECRET in .env (see .env.example)}
     volumes:

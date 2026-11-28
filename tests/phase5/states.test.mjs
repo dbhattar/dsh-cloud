@@ -19,6 +19,7 @@ const ENV = {
   RUNNER_SECRET: randomBytes(16).toString('hex'),
   MAX_RUNNING_SANDBOXES: '1',
   EVICT_AFTER_IDLE_SECONDS: '99999', // never evict: the second user must be refused
+  WAIT_QUEUE_SECONDS: '0', // and not queued either: this suite tests the refusal (the waiting room is tests/phase5/waiting-room.test.mjs)
   MAX_RUN_SECONDS: '90', // longer than the idle limit, so the idle scenario can be reached before the run-time one
   MAX_DISK_MB: '1',
   DISK_CHECK_SECONDS: '15',
