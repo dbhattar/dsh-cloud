@@ -5,7 +5,7 @@
 import test, { before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
-import { assertNoDevData, compose, request, sh, signupUser, waitFor, waitSandboxUp } from '../lib/helpers.mjs';
+import { assertNoDevData, compose, request, sh, signupUser, waitFor } from '../lib/helpers.mjs';
 import { loadBrowser, signIn, waitForText } from '../ui/browser.mjs';
 
 const FILE = 'docker-compose.gateway.yml';
@@ -13,6 +13,9 @@ const run = randomBytes(3).toString('hex');
 const ENV = {
   SANDBOX_RUNTIME: process.env.SANDBOX_RUNTIME ?? 'runc',
   ALLOW_SIGNUP: 'true',
+  UPSTREAM_API_KEY: 'phase5-placeholder', // required by the stack; nothing here calls a model
+  LLM_ADMIN_SECRET: randomBytes(16).toString('hex'),
+  RUNNER_SECRET: randomBytes(16).toString('hex'),
   MAX_RUNNING_SANDBOXES: '1',
   EVICT_AFTER_IDLE_SECONDS: '99999', // never evict: the second user has to wait
   WAIT_QUEUE_SECONDS: '300',
@@ -58,7 +61,8 @@ test('full: the second user is put in line, told their place, and not shown a re
   users.a = await signupUser('a', run);
   users.b = await signupUser('b', run);
   await post(users.a, '/gw/api/start');
-  await waitSandboxUp(users.a);
+  // Running, not merely answering: the launching page also answers 200 while the user is still waiting for a place.
+  await waitFor(async () => (await status(users.a)).state === 'running', { timeoutMs: 150000, what: 'a running' });
   await post(users.b, '/gw/api/start');
   const s = await waitFor(async () => { const j = await status(users.b); return j.queue ? j : null; }, { timeoutMs: 60000, what: 'a place in line for b' });
   assert.equal(s.state, 'starting');

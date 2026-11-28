@@ -41,6 +41,8 @@ const tryDocker = (...a) => { try { return docker(...a); } catch { return ''; } 
 const running = (u) => tryDocker('inspect', '-f', '{{.State.Running}}', u.container) === 'true';
 const status = async (u) => JSON.parse((await request('/gw/api/status', { headers: { cookie: u.cookie } })).body);
 const usageOf = async (u) => JSON.parse((await request('/gw/api/usage', { headers: { cookie: u.cookie } })).body);
+/** These tests are about limits, not the first-visit welcome (tests/phase5/welcome.test.mjs): dismiss it, or its dialog covers the buttons they click. */
+const welcomed = async (u) => { await request('/gw/api/welcome', { method: 'POST', headers: { cookie: u.cookie, origin: 'https://localhost' } }); return u; };
 const start = (u) => request('/gw/api/start', { method: 'POST', headers: { cookie: u.cookie } });
 const waitProblem = (u, code, timeoutMs = 90000) => waitFor(async () => { const s = await status(u); return s.problem?.code === code ? s : null; }, { timeoutMs, what: `${code} for ${u.email}` });
 /** Record usage for a user directly in the llm-proxy database, as the proxy would after model calls. */
@@ -72,8 +74,8 @@ after(async () => {
 });
 
 test('capacity: a second user is told the service is busy, with a retry action, and the raw message stays in the details', async () => {
-  users.a = await signupUser('a', run);
-  users.b = await signupUser('b', run);
+  users.a = await welcomed(await signupUser('a', run));
+  users.b = await welcomed(await signupUser('b', run));
   await start(users.a);
   await waitSandboxUp(users.a);
   keepAlive = setInterval(() => { request('/', { headers: { cookie: users.a.cookie, accept: 'text/html', 'sec-fetch-dest': 'iframe' } }).catch(() => {}); }, 5000); // a browser tab being open
@@ -148,7 +150,7 @@ test('model access: a spent daily allowance, then a spent shared budget, show as
 });
 
 test('an unrequested stop is explained when the user comes back', async () => {
-  users.c = await signupUser('c', run);
+  users.c = await welcomed(await signupUser('c', run));
   // capacity is 1, so free the slot first by stopping a's workspace the way a user would
   await request('/gw/api/stop', { method: 'POST', headers: { cookie: users.a.cookie } });
   await start(users.c);
