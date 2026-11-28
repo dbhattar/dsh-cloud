@@ -53,7 +53,7 @@ sqlite_backup "${PROJECT}_gateway-data" gateway.db gateway
 sqlite_backup "${PROJECT}_llm-proxy-data" llm-proxy.db llm-proxy
 
 echo "==> volumes"
-VOLS="$(docker volume ls --format '{{.Name}}' | grep -E "^dsh-(data|ws)-[0-9]+\$|^${PROJECT}_caddy-data\$" | sort || true)"
+VOLS="$(docker volume ls --format '{{.Name}}' | grep -E "^dsh-(data|ws)-[0-9]+(-[0-9a-f]{16})?\$|^${PROJECT}_caddy-data\$" | sort || true)"
 COUNT=0
 for v in $VOLS; do
   # tar exits 1 when a file changed while it was read; that is a warning, not a failure.

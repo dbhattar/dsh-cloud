@@ -87,6 +87,8 @@ if [ "$RUNTIME" = runc ]; then
   echo "         For the full experience use gVisor: scripts/lima/setup.sh (Lima VM on a Mac), or --runtime runsc on a host where it is registered." >&2
 fi
 export SANDBOX_RUNTIME="$RUNTIME"
+# Plain runc is refused by the runner unless said so in words; this script says so only for the development fallback it just warned about.
+[ "$RUNTIME" = runc ] && export ALLOW_INSECURE_RUNTIME=true
 
 COMPOSE="docker compose --env-file $ENV_FILE -f infra/docker-compose.gateway.yml"
 SANDBOXES="$(docker ps -a --filter label=dsh-cloud.user --format '{{.Names}}')"
@@ -110,10 +112,14 @@ for c in $SANDBOXES; do
   docker rm -f "$c" >/dev/null
   if [ "$WIPE" = 1 ]; then
     id="${c#dsh-sbx-}"
-    docker volume rm "dsh-data-$id" "dsh-ws-$id" >/dev/null 2>&1 || true
     docker network rm "dsh-net-$id" >/dev/null 2>&1 || true
   fi
 done
+if [ "$WIPE" = 1 ]; then
+  # Every account volume, by name pattern: since volume names carry a per-account key (dsh-data-<id>-<key>), they cannot be derived from
+  # a container name, and volumes of accounts whose container is gone (or of an earlier database) are deleted too.
+  docker volume ls -q | grep -E '^dsh-(data|ws)-[0-9]+(-[0-9a-f]{16})?$' | while read -r v; do docker volume rm "$v" >/dev/null 2>&1 || true; done
+fi
 
 if [ "$BUILD_HARNESS" = 1 ] || [ ! -f sandbox/.harness-dist/apps/cli/lib/bin.js ]; then
   [ "$BUILD_HARNESS" = 1 ] || echo "==> no built harness found; building it now"

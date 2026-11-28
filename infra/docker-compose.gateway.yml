@@ -2,6 +2,13 @@
 # Only sandbox-runner mounts the Docker socket. Services share the compose `default` network; sandboxes
 # are never on it (each gets its own internal network from sandbox-runner), so they cannot reach the runner.
 name: dshcloud
+# Service logs are bounded and rotated: the daemon's default keeps everything for ever on the host's disk, and the egress proxy and the
+# gateway log every refusal and every audit event (docs/security-review.md, SEC-07).
+x-logging: &logging
+  driver: local
+  options:
+    max-size: 20m
+    max-file: "5"
 services:
   sandbox-image:
     build: ../sandbox
@@ -10,6 +17,9 @@ services:
     restart: "no"
   gateway:
     restart: unless-stopped # a crash or a reboot must not leave the site down (docs/security-review.md, SEC-03)
+    logging: *logging
+    mem_limit: 768m # several times what it uses idle (about 20 to 120 MB); a runaway or a flood cannot take the host's memory
+    pids_limit: 512
     build: ../gateway
     depends_on:
       sandbox-image:
@@ -83,6 +93,9 @@ services:
   # and token; reachable only by services on the compose network (never by sandboxes).
   sandbox-runner:
     restart: unless-stopped # a crash or a reboot must not leave the site down (docs/security-review.md, SEC-03)
+    logging: *logging
+    mem_limit: 256m # several times what it uses idle (about 20 to 120 MB); a runaway or a flood cannot take the host's memory
+    pids_limit: 512
     build: ../runner
     depends_on:
       sandbox-image:
@@ -91,8 +104,12 @@ services:
       PUBLIC_URL: https://localhost/
       RUNNER_SECRET: ${RUNNER_SECRET:?set RUNNER_SECRET in .env (see .env.example)}
       SANDBOX_IMAGE: dsh-sandbox:latest
-      # OCI runtime for user sandboxes: runc by default; runsc (gVisor) once registered with the Docker daemon.
-      SANDBOX_RUNTIME: ${SANDBOX_RUNTIME:-runc}
+      # OCI runtime for user sandboxes: gVisor (runsc). The runner REFUSES TO START with runc or an empty value unless
+      # ALLOW_INSECURE_RUNTIME=true, because under runc a sandbox shares the host kernel (docs/security-review.md, SEC-05).
+      SANDBOX_RUNTIME: ${SANDBOX_RUNTIME:-runsc}
+      ALLOW_INSECURE_RUNTIME: ${ALLOW_INSECURE_RUNTIME:-false}
+      SANDBOX_LOG_MAX_SIZE: ${SANDBOX_LOG_MAX_SIZE:-10m} # a sandbox's own console output kept on the host
+      SANDBOX_LOG_MAX_FILES: ${SANDBOX_LOG_MAX_FILES:-3}
       LLM_PROXY_URL: http://llm-proxy:8081
       # Web access for sandboxes only through egress-proxy, which the runner attaches to every user network.
       SHARED_ROLES: gateway,llm-proxy,egress-proxy
@@ -110,6 +127,9 @@ services:
   # gateway (and still needs LLM_ADMIN_SECRET).
   llm-proxy:
     restart: unless-stopped # a crash or a reboot must not leave the site down (docs/security-review.md, SEC-03)
+    logging: *logging
+    mem_limit: 512m # several times what it uses idle (about 20 to 120 MB); a runaway or a flood cannot take the host's memory
+    pids_limit: 512
     build: ../llm-proxy
     labels:
       dsh-cloud.role: llm-proxy # sandbox-runner attaches it to every user network
@@ -134,6 +154,9 @@ services:
   # on every user network. Refuses private, loopback, link-local and metadata destinations; logs every request.
   egress-proxy:
     restart: unless-stopped # a crash or a reboot must not leave the site down (docs/security-review.md, SEC-03)
+    logging: *logging
+    mem_limit: 512m # several times what it uses idle (about 20 to 120 MB); a runaway or a flood cannot take the host's memory
+    pids_limit: 512
     build: ../egress-proxy
     labels:
       dsh-cloud.role: egress-proxy # sandbox-runner attaches it to every user network
@@ -153,6 +176,9 @@ services:
       - "3128"
   proxy:
     restart: unless-stopped # a crash or a reboot must not leave the site down (docs/security-review.md, SEC-03)
+    logging: *logging
+    mem_limit: 512m # several times what it uses idle (about 20 to 120 MB); a runaway or a flood cannot take the host's memory
+    pids_limit: 512
     image: caddy:2.11.9@sha256:4851e54a46b206517c574821bb5cc67f170d2156041e9fbc4c9193b45e84a75b
     ports:
       - "443:443"

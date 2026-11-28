@@ -27,7 +27,7 @@ function world({ llm = true, runnerDown = false, llmDown = false, extra = {} } =
     ],
     activity: async () => { if (llmDown) throw new Error('proxy down'); return { users: [] }; },
   };
-  const manager = { runner, llm: llm ? proxy : null };
+  const manager = { runner, llm: llm ? proxy : null, diskUsage: () => runner.diskUsage() };
   const overview = createOverview({ store, manager, cfg, now: () => NOW, dataDir: '.' });
   return { store, overview };
 }

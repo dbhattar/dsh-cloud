@@ -9,6 +9,8 @@ export const STAGES = [
   { key: 'connect', label: 'Signing in to your workspace' },
 ];
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const DISK_BLIND_AFTER = 3; // consecutive failed disk checks before new workspaces are held back
+const DISK_HOT_SECONDS = 30; // check this often while someone is within 20% of the limit
 
 /**
  * One container per user, created and driven through the sandbox-runner (the only holder of the Docker
@@ -16,7 +18,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  * the workspace.
  */
 export class SandboxManager {
-  constructor({ runner, cfg, log = console.log, llm = null, audit = { record() {} } }) {
+  constructor({ runner, cfg, log = console.log, llm = null, audit = { record() {} }, volumeKeyOf = () => '' }) {
+    this.volumeKeyOf = volumeKeyOf; // userId -> the account's volume key, '' for one that predates keys (SEC-09)
     this.audit = audit;
     this.runner = runner;
     this.llm = llm;
@@ -35,6 +38,9 @@ export class SandboxManager {
     this.sweepTimer = null;
     this.lineOpen = false; // true from the first newcomer who finds the service full until the waiting room is empty again
     this.lastDiskCheck = 0;
+    this.diskFailures = 0; // consecutive failed disk checks; at DISK_BLIND_AFTER no new workspace is started (fail closed)
+    this.diskHot = false; // somebody running is close to the limit: check more often
+    this.diskFull = false; // the total cap is reached
     this.cpuSample = new Map(); // userId -> { ns, at } previous CPU reading, to compute use between reaps
     this.lastBusy = new Map(); // userId -> { at, signal } last time the agent looked busy
     this.keptBusy = new Set(); // userIds currently being kept alive past the idle limit (so the audit line is written once)
@@ -226,17 +232,28 @@ export class SandboxManager {
   async #create(userId) {
     const token = this.llm ? await this.llm.issueToken(userId) : undefined;
     if (token) this.audit.record('token.issue', { userId });
-    await this.runner.create(userId, token);
+    await this.runner.create(userId, token, this.volumeKeyOf(userId));
     this.audit.record('sandbox.create', { userId });
   }
 
   async #start(userId) {
+    // Fail closed: with the disk check blind or the host's storage full, another workspace would start with nothing watching its disk.
+    if (this.cfg.maxDiskMb && this.diskFailures >= DISK_BLIND_AFTER) throw new SandboxProblem('service_unavailable', {}, 'storage usage cannot be read, so no new workspace is started');
+    if (this.diskFull) throw new SandboxProblem('service_unavailable', {}, 'storage on the server is full, so no new workspace is started');
     const name = this.name(userId);
     let info = await this.runner.info(userId);
     if (info && this.llm && !info.llmManaged) {
       // Created before metering existed: its environment may hold the real key. Recreate; volumes keep the data.
       this.log(`sandbox ${userId}: pre-proxy container, recreating`);
       this.audit.record('sandbox.recreate', { userId, reason: 'pre_proxy' });
+      await this.runner.remove(userId);
+      info = null;
+    }
+    if (info && (info.volumeKey ?? '') !== this.volumeKeyOf(userId)) {
+      // A container with this id that belongs to another account (the database was replaced or restored from an older one, so ids were
+      // reused): it mounts that account's volumes. Never attach this user to it; remove the container (the volumes stay) and make theirs.
+      this.log(`sandbox ${userId}: container belongs to another account's volumes, recreating`);
+      this.audit.record('sandbox.recreate', { userId, reason: 'volume_key' });
       await this.runner.remove(userId);
       info = null;
     }
@@ -426,17 +443,34 @@ export class SandboxManager {
         }
       }
     }
-    if (maxDiskMb && Date.now() - this.lastDiskCheck >= diskCheckSeconds * 1000) {
+    // Checked every diskCheckSeconds, and every 30 s while someone running is within 20% of the limit: the poll is the only thing that
+    // stops a user, so the closer they are, the less time they get.
+    const every = (this.diskHot ? Math.min(diskCheckSeconds, DISK_HOT_SECONDS) : diskCheckSeconds) * 1000;
+    if ((maxDiskMb || this.cfg.maxTotalDiskMb) && Date.now() - this.lastDiskCheck >= every) {
       this.lastDiskCheck = Date.now();
-      let usage;
+      let rows;
       try {
-        usage = await this.runner.diskUsage();
+        rows = await this.runner.diskUsage();
       } catch (e) {
+        // Not being able to measure is not the same as being under the limit. One failure is noise; several in a row mean the next
+        // workspaces would start with nothing watching their disk, so they are held back until a check succeeds again.
+        this.diskFailures++;
         this.log(`disk usage: ${e.message}`);
+        if (this.diskFailures === 1) this.audit.record('disk.check_failed', { error: String(e.message).slice(0, 200) });
+        if (this.diskFailures === DISK_BLIND_AFTER) this.audit.record('disk.blind', { failures: this.diskFailures });
         return;
       }
+      if (this.diskFailures >= DISK_BLIND_AFTER) this.audit.record('disk.check_recovered', { failures: this.diskFailures });
+      this.diskFailures = 0;
+      const usage = this.#attribute(rows);
+      const totalBytes = rows.reduce((n, r) => n + r.bytes, 0); // every volume on the host, whoever owns it
+      const full = this.cfg.maxTotalDiskMb > 0 && totalBytes >= this.cfg.maxTotalDiskMb * 1024 * 1024;
+      if (full && !this.diskFull) this.audit.record('disk.full', { totalMb: Math.round(totalBytes / 1024 / 1024), capMb: this.cfg.maxTotalDiskMb });
+      this.diskFull = full;
+      if (!maxDiskMb) return;
       const limit = maxDiskMb * 1024 * 1024;
       const running = new Set(list.filter((s) => s.running).map((s) => s.userId));
+      this.diskHot = usage.some(({ userId, bytes }) => running.has(userId) && bytes > limit * 0.8);
       for (const { userId, bytes } of usage) {
         if (bytes <= limit || !running.has(userId)) continue;
         const mb = Math.round(bytes / 1024 / 1024);
@@ -569,11 +603,25 @@ export class SandboxManager {
     return { done };
   }
 
+  /**
+   * Bytes per account, counting only the volumes that belong to it (its id AND its volume key): volumes left by another account that
+   * had the same id are not charged to this one, and a stale volume cannot get a new account stopped for its predecessor's data.
+   */
+  async diskUsage() {
+    return this.#attribute(await this.runner.diskUsage());
+  }
+
+  #attribute(rows) {
+    const by = new Map();
+    for (const r of rows) if ((r.key ?? '') === this.volumeKeyOf(r.userId)) by.set(r.userId, (by.get(r.userId) ?? 0) + r.bytes);
+    return [...by].map(([userId, bytes]) => ({ userId, bytes }));
+  }
+
   /** The user's volumes in bytes, from a cache of the runner's answer (Docker computes sizes on demand, which is slow). */
   async #storageBytes(userId) {
     if (Date.now() - this.diskCache.at > 60_000) {
       try {
-        this.diskCache = { at: Date.now(), loaded: true, byUser: new Map((await this.runner.diskUsage()).map((u) => [u.userId, u.bytes])) };
+        this.diskCache = { at: Date.now(), loaded: true, byUser: new Map((await this.diskUsage()).map((u) => [u.userId, u.bytes])) };
       } catch (e) {
         this.log(`storage usage: ${e.message}`);
         this.diskCache = { ...this.diskCache, at: Date.now() - 30_000 }; // try again in 30 s, keep what we had

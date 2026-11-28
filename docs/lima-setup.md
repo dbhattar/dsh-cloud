@@ -78,7 +78,7 @@ See "What has and has not been verified" in [plan-phase-4.md](plan-phase-4.md): 
 
 ## Choosing the runtime (and what happens under the wrong one)
 
-Sandboxes run under the runtime in `SANDBOX_RUNTIME` (`runsc` is gVisor, `runc` is plain Docker). The compose default is `runc`, and the runtime is fixed when the runner container is created.
+Sandboxes run under the runtime in `SANDBOX_RUNTIME` (`runsc` is gVisor, `runc` is plain Docker). The compose default is now `runsc`, and **the runner refuses to start with `runc` or an empty value unless `ALLOW_INSECURE_RUNTIME=true`** (docs/security-review.md, SEC-05; `scripts/restart.sh` sets it only for the development fallback to runc, with a warning). The runtime is fixed when the runner container is created.
 
 **What goes wrong under runc.** The harness's shell tool refuses to run commands unconfined. Under runc user namespaces are denied (so bubblewrap cannot work) and the Landlock launcher is not in the image, so the model gets "Error: sandbox mode "workspace-write" is requested but no sandbox backend is usable on this host; refusing to run the command unconfined. Install bubblewrap or run a Landlock-enforcing kernel...". The page itself works, so the failure only shows when the agent tries to run a command. Seen on 2026-11-25: after a restart of the VM stack without `SANDBOX_RUNTIME=runsc`, the runner created sandboxes under runc and the shell tool failed. Another sign: `docker inspect -f '{{.HostConfig.Runtime}}' dsh-sbx-<id>` says `runc`, and `uname -r` inside says the VM's kernel (for example `7.0.0-43-generic`) instead of `4.19.0-gvisor`.
 

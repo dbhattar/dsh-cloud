@@ -21,8 +21,13 @@ export const compose = (file, args, env = {}) => {
   }
   return composeRaw(file, args, env);
 };
-const composeRaw = (file, args, env) =>
-  sh('docker', ['compose', '-f', join(ROOT, 'infra', file), ...args], { env: { ...process.env, ...env }, timeout: 3600000 }); // image builds from harness source can take a while
+const composeRaw = (file, args, env) => {
+  const merged = { ...process.env, ...env };
+  // The runner refuses plain runc unless told it is insecure on purpose (SEC-05). The suites run under runc on Docker Desktop, which has no
+  // gVisor, so they say so; under gVisor (SANDBOX_RUNTIME=runsc) nothing is added and the runner's own check applies.
+  if (!merged.SANDBOX_RUNTIME || merged.SANDBOX_RUNTIME === 'runc') { merged.SANDBOX_RUNTIME ||= 'runc'; merged.ALLOW_INSECURE_RUNTIME ||= 'true'; }
+  return sh('docker', ['compose', '-f', join(ROOT, 'infra', file), ...args], { env: merged, timeout: 3600000 }); // image builds from harness source can take
+};
 
 /** HTTP/1.1 request that never follows redirects. Returns {status, headers, body}. */
 export function request(path, { method = 'GET', headers = {}, body } = {}) {
@@ -136,4 +141,16 @@ export function assertNoDevData() {
         'Remove it yourself (scripts/restart.sh --wipe) or set DSH_TESTS_ALLOW_DESTRUCTIVE=1.',
     );
   }
+}
+
+/** The volumes of account `id`: dsh-data-<id> and dsh-ws-<id>, with or without the account's key (dsh-data-<id>-<16 hex>, see SEC-09). */
+export function userVolumes(id) {
+  const re = new RegExp(`^dsh-(data|ws)-${id}(-[0-9a-f]{16})?$`);
+  return sh('docker', ['volume', 'ls', '-q']).split('\n').map((n) => n.trim()).filter((n) => re.test(n));
+}
+
+/** Remove them (a volume still in use is left, as before). */
+export function removeUserVolumes(id) {
+  const names = userVolumes(id);
+  if (names.length) try { sh('docker', ['volume', 'rm', ...names]); } catch { /* in use or already gone */ }
 }

@@ -49,7 +49,7 @@ async function section(fn) {
 export function createOverview({ store, manager, cfg, now = () => Date.now(), dataDir = cfg.dataDir }) {
   let disk = { at: 0, rows: [] };
   const diskUsage = async () => {
-    if (now() - disk.at > 60_000) disk = { at: now(), rows: await manager.runner.diskUsage() };
+    if (now() - disk.at > 60_000) disk = { at: now(), rows: await manager.diskUsage() };
     return disk.rows;
   };
 

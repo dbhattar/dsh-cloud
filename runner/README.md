@@ -16,7 +16,7 @@ API on the compose network, which sandboxes never join (`Authorization: Bearer R
 | `DELETE /v1/sandboxes/:id` | remove the container, keep the volumes and the user network; `?network=1` also removes the network |
 | `GET /v1/sandboxes/:id/logs?tail=N` | `{ logs }`, N at most 500 |
 | `GET /v1/sandboxes/:id/activity` | `{ cpuNs, memBytes }`: cumulative CPU time and memory of the running container, one Docker stats sample; the gateway differences two samples to see whether the sandbox is busy; 404 if there is no such container |
-| `GET /v1/usage` | `[{ userId, bytes }]`: disk used by each user's `dsh-data-<id>` and `dsh-ws-<id>` volumes (Docker computes sizes on demand, so it can take seconds) |
+| `GET /v1/usage` | `[{ userId, key, bytes }]`: disk used by each account's two volumes, one row per id and volume key (`key` is empty for an account that predates keys); Docker computes sizes on demand, so it can take seconds |
 
 Config (env): `PUBLIC_URL`, `RUNNER_SECRET` (min 16 chars) required; `SANDBOX_IMAGE`, `SHARED_ROLES`, `RECONCILE_SECONDS`, `SANDBOX_MEMORY_MB`, `SANDBOX_CPUS`, `SANDBOX_PIDS`, `SANDBOX_TMP_MB`, `SANDBOX_NOFILE`, `SANDBOX_RUNTIME`, `EGRESS_PROXY_URL` (sets `HTTP(S)_PROXY` and `NODE_USE_ENV_PROXY` in the sandbox; unset means no web access), `LLM_PROXY_URL`, `DEFAULT_MODEL`, `MODEL_MAX_OUTPUT_TOKENS` (most one model reply may produce, default 16384; keep it at or below the llm-proxy's `MAX_OUTPUT_TOKENS`), `MODEL_DISPLAY_NAME` (the model's name in the picker; a friendly default for the free router), `SHOW_HARNESS_SIGN_IN`, `DOCKER_SOCKET`, `PORT`.
 
@@ -33,3 +33,8 @@ Each user gets an internal bridge network `dsh-net-<id>` (no default route, no p
 The egress proxy (`SHARED_ROLES` includes `egress-proxy` in compose) is attached the same way and is the only path out. A sandbox can reach the gateway, llm-proxy and egress proxy on its network; the gateway is public anyway, and the llm-proxy serves no admin routes on the network (its admin API is a unix socket shared only with the gateway).
 
 Scale: Docker's default address pool allows roughly 30 networks. For more, set a wider pool in `/etc/docker/daemon.json`, for example `{"default-address-pools":[{"base":"10.200.0.0/16","size":28}]}` (4096 networks of 14 usable addresses each), and restart Docker.
+
+**Isolation settings (docs/security-review.md, SEC-05, 07, 09).**
+- **Runtime:** `SANDBOX_RUNTIME` defaults to `runsc` (gVisor). `runc`, an empty value, or anything the daemon does not have makes the runner refuse to start (`ALLOW_INSECURE_RUNTIME=true` is the explicit development opt-out, logged as INSECURE at every start). After each create it inspects the container and removes it if the daemon used another runtime than asked for.
+- **Logs:** each sandbox's console log is capped (`SANDBOX_LOG_MAX_SIZE`, default `10m`, and `SANDBOX_LOG_MAX_FILES`, default 3; the `local` driver rotates and compresses). Without a cap a process printing in a loop fills the host disk outside every volume quota.
+- **Volumes:** `POST /v1/sandboxes/:id` takes an optional `volumeKey` (16 hex characters, made by the gateway when the account is created). With it the volumes are `dsh-data-<id>-<key>` and `dsh-ws-<id>-<key>`, and the container carries it as the label `dsh-cloud.vkey` (returned by `GET /v1/sandboxes/:id`). Without it (accounts that predate keys) the names stay `dsh-data-<id>` and `dsh-ws-<id>`. A reused user id therefore gets new volumes and never mounts a previous owner's.

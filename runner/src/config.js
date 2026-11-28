@@ -6,14 +6,28 @@ function modelDisplayName(env) {
   return name;
 }
 
+/** A Docker log size such as 10m or 500k; anything else is an error rather than being passed on to the daemon. */
+function logSize(value, fallback) {
+  const v = value === undefined || value === '' ? fallback : value;
+  if (!/^[1-9][0-9]{0,5}[kmg]$/.test(v)) throw new Error('SANDBOX_LOG_MAX_SIZE must look like 10m, 500k or 1g');
+  return v;
+}
+
 export function loadConfig(env = process.env) {
   const publicUrl = env.PUBLIC_URL;
   if (!publicUrl) throw new Error('PUBLIC_URL is required (e.g. https://localhost/)');
   const url = new URL(publicUrl);
   const secret = env.RUNNER_SECRET || '';
   if (secret.length < 16) throw new Error('RUNNER_SECRET is required (min 16 chars)');
-  const runtime = env.SANDBOX_RUNTIME ?? 'runc';
+  // gVisor by default, and plain runc only when the operator says so in words (docs/security-review.md, SEC-05). Sandboxes run commands
+  // an AI wrote; under runc they share the host's kernel. An unset, empty or `runc` value used to be accepted silently, so a host
+  // without gVisor ran every user's agent on the host kernel and the visible symptom was only a broken shell tool.
+  const runtime = env.SANDBOX_RUNTIME ?? 'runsc';
   if (runtime && !/^[a-z0-9][a-z0-9_.-]{0,31}$/.test(runtime)) throw new Error('SANDBOX_RUNTIME must be a runtime name such as runc or runsc');
+  const allowInsecureRuntime = env.ALLOW_INSECURE_RUNTIME === 'true';
+  if ((!runtime || runtime === 'runc') && !allowInsecureRuntime) {
+    throw new Error(`refusing to start: SANDBOX_RUNTIME is ${runtime ? `"${runtime}"` : 'empty'}, which runs sandboxes on the host kernel. Use runsc (gVisor), or set ALLOW_INSECURE_RUNTIME=true for development on a machine with nothing to lose`);
+  }
   const int = (k, d) => (env[k] === undefined || env[k] === '' ? d : Number.parseInt(env[k], 10));
   return {
     port: int('PORT', 8090),
@@ -40,8 +54,13 @@ export function loadConfig(env = process.env) {
     sandboxPids: int('SANDBOX_PIDS', 256),
     sandboxTmpMb: int('SANDBOX_TMP_MB', 256),
     sandboxNofile: int('SANDBOX_NOFILE', 4096),
+    // What a sandbox's own console output may keep on the host (the container log): without a bound, a process printing in a loop fills
+    // the host's disk, outside every volume quota (SEC-07).
+    sandboxLogMaxSize: logSize(env.SANDBOX_LOG_MAX_SIZE, '10m'),
+    sandboxLogMaxFiles: int('SANDBOX_LOG_MAX_FILES', 3),
     // OCI runtime for sandboxes: 'runc' for dev; 'runsc' (gVisor) in production. Empty = daemon default.
     sandboxRuntime: runtime,
+    allowInsecureRuntime,
   };
 }
 
@@ -52,6 +71,6 @@ export function loadConfig(env = process.env) {
  */
 export function runtimeWarning(cfg) {
   if (cfg.sandboxRuntime && cfg.sandboxRuntime !== 'runc') return null;
-  return 'sandbox runtime is runc: the agent\'s shell tool will not work in sandboxes (the harness refuses to run commands unconfined). '
-    + 'Set SANDBOX_RUNTIME=runsc on a Docker host with gVisor registered (scripts/restart.sh picks it automatically; scripts/lima/setup.sh --stack for a Mac).';
+  return 'INSECURE: sandbox runtime is runc (ALLOW_INSECURE_RUNTIME=true): sandboxes share the host kernel, and the agent\'s shell tool will not work in them (the harness refuses to run commands unconfined). '
+    + 'Development only. Set SANDBOX_RUNTIME=runsc on a Docker host with gVisor registered (scripts/restart.sh picks it automatically; scripts/lima/setup.sh --stack for a Mac).';
 }

@@ -21,13 +21,13 @@ export class RunnerClient {
     return { status: res.status, data: res.status === 204 ? null : await res.json() };
   }
 
-  /** { running, startedAt, llmManaged, exitCode, oomKilled }, or null when the user has no container. */
+  /** { running, startedAt, llmManaged, volumeKey, exitCode, oomKilled }, or null when the user has no container. */
   async info(userId) {
     return (await this.#call('GET', `/${userId}`, { allow: [404] })).data;
   }
   /** Create (not start) the user's container; the runner builds the spec from the id and token alone. */
-  async create(userId, llmToken) {
-    await this.#call('POST', `/${userId}`, { body: llmToken ? { llmToken } : {} });
+  async create(userId, llmToken, volumeKey = '') {
+    await this.#call('POST', `/${userId}`, { body: { ...(llmToken ? { llmToken } : {}), ...(volumeKey ? { volumeKey } : {}) } });
   }
   /** Rejects with a message containing "stale_network" if the container's network was recreated. */
   async start(userId) {
@@ -47,7 +47,7 @@ export class RunnerClient {
   async activity(userId) {
     return (await this.#call('GET', `/${userId}/activity`)).data;
   }
-  /** [{ userId, bytes }]: disk used by each user's two volumes. */
+  /** [{ userId, key, bytes }]: disk used by each account's two volumes (key is empty for accounts that predate volume keys). */
   async diskUsage() {
     const res = await this.fetch(`${this.url}/v1/usage`, { headers: { authorization: `Bearer ${this.secret}` }, signal: AbortSignal.timeout(60000) });
     if (!res.ok) throw new Error(`runner GET /v1/usage -> ${res.status}`);

@@ -5,7 +5,7 @@
 import test, { before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
-import { assertNoDevData, compose, cookieOf, request, sh, signupUser, waitFor, waitSandboxUp } from '../lib/helpers.mjs';
+import { assertNoDevData, compose, cookieOf, removeUserVolumes, request, sh, signupUser, waitFor, waitSandboxUp } from '../lib/helpers.mjs';
 
 const FILE = 'docker-compose.gateway.yml';
 const run = randomBytes(3).toString('hex');
@@ -55,7 +55,7 @@ after(() => {
   if (!owned) return;
   for (const u of Object.values(users)) {
     tryDocker('rm', '-f', u.container);
-    tryDocker('volume', 'rm', `dsh-data-${u.id}`, `dsh-ws-${u.id}`);
+    removeUserVolumes(u.id);
     tryDocker('network', 'rm', `dsh-net-${u.id}`);
   }
   compose(FILE, ['down', '-v'], ENV);

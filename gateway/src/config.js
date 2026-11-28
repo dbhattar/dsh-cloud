@@ -49,7 +49,12 @@ export function loadConfig(env = process.env) {
     busyCpuPercent: int('BUSY_CPU_PERCENT', 5), // of one CPU, averaged over the reap interval
     busySignalSeconds: int('BUSY_SIGNAL_SECONDS', 300), // how long a model call or CPU burst keeps counting as "busy"
     maxRunSeconds: int('MAX_RUN_SECONDS', 0), // continuous run time before a sandbox is stopped
-    maxDiskMb: int('MAX_DISK_MB', 0), // per user, both volumes together
+    // Per user, both volumes together. On by default (a deployment that does not copy the compose file used to run with no limit at all);
+    // 0 turns it off. It is enforced by polling, so it bounds how long a user can stay over, not how fast they fill the disk: the real
+    // bound is a filesystem quota on Docker's data root (docs/security-review.md, SEC-08).
+    maxDiskMb: int('MAX_DISK_MB', 2048),
+    // Total bytes of every account volume on the host (0 = no cap): at or over it, no new workspace is started. Orphaned volumes count.
+    maxTotalDiskMb: int('MAX_TOTAL_DISK_MB', 0),
     diskCheckSeconds: int('DISK_CHECK_SECONDS', 300),
     // Crash watchdog: a sandbox the user was using that exits unexpectedly is started again within watchdogSeconds. After
     // crashMaxRestarts exits inside crashWindowSeconds it is held instead (a crash loop), until the user restarts it.

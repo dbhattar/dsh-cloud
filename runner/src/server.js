@@ -1,7 +1,7 @@
 import http from 'node:http';
 import { timingSafeEqual } from 'node:crypto';
 import { Networks, networkName } from './network.js';
-import { LABEL, LLM_LABEL, LLM_LABEL_VALUE, buildSpec, containerName } from './spec.js';
+import { LABEL, LLM_LABEL, LLM_LABEL_VALUE, VOLUME_KEY, VOLUME_KEY_LABEL, buildSpec, containerName } from './spec.js';
 
 const USER_ID = /^[1-9][0-9]{0,15}$/;
 const LLM_TOKEN = /^[A-Za-z0-9_-]{1,200}$/;
@@ -41,8 +41,8 @@ async function readJson(req) {
 /**
  * Narrow sandbox API on the control network (all but /healthz need `Authorization: Bearer RUNNER_SECRET`):
  *   GET    /v1/sandboxes              [{ userId, running }]
- *   GET    /v1/sandboxes/:id          { running, startedAt, llmManaged, exitCode, oomKilled } or 404
- *   POST   /v1/sandboxes/:id          { llmToken? } create (409 if it exists)
+ *   GET    /v1/sandboxes/:id          { running, startedAt, llmManaged, volumeKey, exitCode, oomKilled } or 404
+ *   POST   /v1/sandboxes/:id          { llmToken?, volumeKey? } create (409 if it exists); volumeKey is part of the volume names
  *   POST   /v1/sandboxes/:id/start    204; 409 { error: 'stale_network' } if its network was recreated
  *   POST   /v1/sandboxes/:id/stop     204
  *   GET    /v1/sandboxes/:id/activity { cpuNs, memBytes } cumulative CPU time and memory of the running container
@@ -54,13 +54,16 @@ export function createRunner({ cfg, docker, log = console.log, networks = new Ne
     const parts = url.pathname.split('/').filter(Boolean); // ['v1','sandboxes',id?,action?]
     if (parts[0] === 'v1' && parts[1] === 'usage' && parts.length === 2) {
       if (req.method !== 'GET') throw new HttpError(405, 'method not allowed');
-      // Bytes per user across their two volumes (dsh-data-<id> and dsh-ws-<id>).
+      // Bytes per account across its two volumes (dsh-data-<id>[-<key>] and dsh-ws-<id>[-<key>]), one row per (id, key): after a reset
+      // database two accounts can have the same id with different keys, and each must be charged only for its own volumes.
       const bytes = new Map();
       for (const v of await docker.volumes()) {
-        const m = /^dsh-(?:data|ws)-(\d{1,9})$/.exec(v.Name);
-        if (m && v.Size >= 0) bytes.set(Number(m[1]), (bytes.get(Number(m[1])) ?? 0) + v.Size);
+        const m = /^dsh-(?:data|ws)-(\d{1,9})(?:-([0-9a-f]{16}))?$/.exec(v.Name);
+        if (!m || !(v.Size >= 0)) continue;
+        const k = `${m[1]}|${m[2] ?? ''}`;
+        bytes.set(k, (bytes.get(k) ?? 0) + v.Size);
       }
-      return json(res, 200, [...bytes].map(([userId, b]) => ({ userId, bytes: b })));
+      return json(res, 200, [...bytes].map(([k, b]) => { const [id, key] = k.split('|'); return { userId: Number(id), key, bytes: b }; }));
     }
     if (parts[0] !== 'v1' || parts[1] !== 'sandboxes') throw new HttpError(404, 'not found');
     const [, , id, action] = parts;
@@ -84,17 +87,28 @@ export function createRunner({ cfg, docker, log = console.log, networks = new Ne
         exitCode: info.State?.Running ? null : (info.State?.ExitCode ?? null),
         oomKilled: Boolean(info.State?.OOMKilled),
         llmManaged: info.Config?.Labels?.[LLM_LABEL] === LLM_LABEL_VALUE,
+        // Which account's volumes this container mounts (empty for one that predates keys); the gateway recreates a container whose key is not the account's.
+        volumeKey: info.Config?.Labels?.[VOLUME_KEY_LABEL] ?? '',
       });
     }
     if (action === undefined && method === 'POST') {
-      const { llmToken } = await readJson(req);
+      const { llmToken, volumeKey = '' } = await readJson(req);
+      if (volumeKey !== '' && !(typeof volumeKey === 'string' && VOLUME_KEY.test(volumeKey))) throw new HttpError(400, 'invalid volumeKey');
       if (llmToken !== undefined && !(typeof llmToken === 'string' && LLM_TOKEN.test(llmToken))) {
         throw new HttpError(400, 'invalid llmToken');
       }
       if (llmToken && !cfg.llmProxyUrl) throw new HttpError(400, 'llm proxy is not configured');
       if (await docker.inspect(name)) throw new HttpError(409, 'sandbox already exists');
       const hosts = await networks.ensure(id);
-      await docker.create(name, buildSpec(cfg, id, llmToken, hosts));
+      await docker.create(name, buildSpec(cfg, id, llmToken, hosts, volumeKey));
+      // Trust what the daemon made, not what was asked for: a daemon that quietly substitutes another runtime would leave every
+      // sandbox on the host kernel. A mismatch removes the container and refuses.
+      const made = await docker.inspect(name);
+      if (cfg.sandboxRuntime && made && made.HostConfig?.Runtime !== cfg.sandboxRuntime) {
+        await docker.remove(name);
+        log(`refused sandbox ${id}: created with runtime "${made.HostConfig?.Runtime}", expected "${cfg.sandboxRuntime}"`);
+        throw new HttpError(500, 'sandbox runtime mismatch');
+      }
       log(`created sandbox ${id}`);
       return json(res, 201, {});
     }

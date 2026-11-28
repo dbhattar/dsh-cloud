@@ -41,11 +41,13 @@ const manager = (runner, cfg) => {
 };
 const ago = (s) => Date.now() - s * 1000;
 
-test('D1 config: limits default to off in code, signup defaults to invite-only', () => {
+test('D1 config: the disk limit is on by default in code (2048 MB; 0 turns it off), the other limits default to off, signup defaults to invite-only', () => {
   const c = loadConfig(base);
   assert.equal(c.maxRunningSandboxes, 0);
   assert.equal(c.maxRunSeconds, 0);
-  assert.equal(c.maxDiskMb, 0);
+  assert.equal(c.maxDiskMb, 2048, 'a deployment that does not copy the compose file must not run with no quota');
+  assert.equal(loadConfig({ ...base, MAX_DISK_MB: '0' }).maxDiskMb, 0);
+  assert.equal(c.maxTotalDiskMb, 0);
   assert.equal(c.allowSignup, false);
   assert.equal(loadConfig({ ...base, ALLOW_SIGNUP: 'true' }).allowSignup, true);
   assert.equal(loadConfig({ ...base, MAX_RUNNING_SANDBOXES: '5' }).maxRunningSandboxes, 5);
