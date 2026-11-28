@@ -79,9 +79,21 @@ export function createEgressProxy({ cfg, log = console.log, lookup, blocked }) {
     const out = http.request(
       { host: v.address, port, method: req.method, path: url.pathname + url.search, headers, timeout: cfg.idleTimeoutMs, setHost: false },
       (r) => {
-        const rh = { ...r.headers };
-        for (const h of HOP_BY_HOP) delete rh[h];
-        res.writeHead(r.statusCode, rh);
+        // Whatever the upstream server sent is not trusted to be a response Node will relay: writeHead throws for a status outside
+        // 100 to 999 (and for other values), and a throw in this callback is an uncaught exception, which ended the proxy for every
+        // sandbox (docs/security-review.md, SEC-02).
+        try {
+          const rh = { ...r.headers };
+          for (const h of HOP_BY_HOP) delete rh[h];
+          res.writeHead(r.statusCode, rh);
+        } catch {
+          audit(req, target, 'deny', 'invalid upstream response');
+          r.resume();
+          out.destroy();
+          if (!res.headersSent) res.writeHead(502).end('upstream sent an invalid response');
+          else res.destroy();
+          return;
+        }
         r.pipe(res);
       },
     );

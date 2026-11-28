@@ -382,7 +382,15 @@ export function createGateway({ cfg, store, manager, log = console.log, audit = 
   }
 
   async function handle(req, res) {
-    const path = new URL(req.url, 'http://x').pathname;
+    // The request target is whatever bytes the client sent. Parsed inside the guard: a target that is not a valid URL ("//[") used to
+    // throw here, outside any try, and ended the whole process (docs/security-review.md, SEC-01). Once this succeeds, every later
+    // `new URL(req.url, ...)` on the same string in the gateway succeeds too.
+    let path;
+    try {
+      path = new URL(req.url, 'http://x').pathname;
+    } catch {
+      return send(res, 400, 'Bad request', { 'content-type': 'text/plain' });
+    }
     try {
       if (path.startsWith('/gw/')) return await handleGw(req, res, path);
 
@@ -423,11 +431,16 @@ export function createGateway({ cfg, store, manager, log = console.log, audit = 
 
   async function handleUpgrade(req, socket, head) {
     const reject = (line) => socket.end(`HTTP/1.1 ${line}\r\nConnection: close\r\n\r\n`);
+    // First, before any await: once a request is upgraded Node hands over the raw socket and removes its own error handling, so a client
+    // that resets the connection while the sandbox is still starting (up to the start timeout plus the waiting room) would emit an
+    // unhandled 'error' and end the process (SEC-03).
+    socket.on('error', () => {});
     try {
       const user = userOf(req);
       if (!user) return reject('401 Unauthorized');
       if (!sameOrigin(req)) return reject('403 Forbidden');
       const sb = await manager.ensure(user.id);
+      if (socket.destroyed) return; // the client left while the sandbox was starting
       proxyUpgrade(req, socket, head, sb, {
         onOpen: () => manager.wsOpen(user.id),
         onClose: () => manager.wsClose(user.id),

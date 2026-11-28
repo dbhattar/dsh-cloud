@@ -76,9 +76,9 @@ The Phase 4 abuse and isolation tests (`tests/phase4/isolation.test.mjs`, `limit
 - **No process-wide `uncaughtException` handler** that swallows errors. It would keep the proxy up but hide this class of bug (and leave state, like the connection counters, wrong). The fix is the missing listeners, with tests.
 - **No restart policy, health surfacing or fuzzing yet**: see below.
 
-## Follow-ups (not done; each is small)
+## Follow-ups (see the notes on each; the audit is in [security-review.md](security-review.md))
 
-1. **Restart policies.** Add `restart: unless-stopped` to the long-running services (gateway, sandbox-runner, llm-proxy, egress-proxy, Caddy) so a crash of any of them is a blip, not an outage. Check it against `scripts/restart.sh` and the Docker suites, which stop and recreate services.
+1. **Restart policies. Done** (2026-11-28, [security-review.md](security-review.md), SEC-03): `restart: unless-stopped` on the gateway, sandbox-runner, llm-proxy, egress-proxy and Caddy, checked against `scripts/restart.sh` and the Docker suites. Note that `docker stop` and `docker kill` count as a manual stop and are not restarted.
 2. **Show the egress proxy in the admin overview's Services list.** The gateway shares a network with it and the proxy answers `/healthz`.
-3. **Audit the other services for the same pattern**: raw sockets handed to a handler with no `'error'` listener (the gateway's WebSocket proxying in `gateway/src/proxy.js` and the llm-proxy's streaming path are the places to read first), and add a "reset at the worst moment" case to each service's abuse tests.
+3. **Audit the other services for the same pattern** (done for request targets, the upgrade socket and upstream responses; see SEC-01 to SEC-03, which found three more crashes of this kind): raw sockets handed to a handler with no `'error'` listener (the gateway's WebSocket proxying in `gateway/src/proxy.js` and the llm-proxy's streaming path are the places to read first), and add a "reset at the worst moment" case to each service's abuse tests.
 4. **Add the reset case to the Phase 4 abuse suite** so the egress proxy's survival is asserted there too.

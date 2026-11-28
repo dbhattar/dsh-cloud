@@ -275,7 +275,14 @@ export function createProxy({ cfg, store, log = console.log, fetchImpl = fetch, 
   }
 
   async function handle(req, res) {
-    const path = new URL(req.url, 'http://x').pathname;
+    // Parsed inside the guard: a request target that is not a valid URL ("//[") threw here, outside any try, and ended the process,
+    // which any sandbox could do to every user (docs/security-review.md, SEC-01).
+    let path;
+    try {
+      path = new URL(req.url, 'http://x').pathname;
+    } catch {
+      return fail(res, 400, 'bad_request', 'Bad request.');
+    }
     try {
       if (path === '/healthz') return sendJson(res, 200, { ok: true });
       if (path !== '/v1/chat/completions' && path !== '/v1/models') return fail(res, 404, 'not_found', 'Not found.');
@@ -295,7 +302,12 @@ export function createProxy({ cfg, store, log = console.log, fetchImpl = fetch, 
   }
 
   async function handleAdmin(req, res) {
-    const path = new URL(req.url, 'http://x').pathname;
+    let path;
+    try {
+      path = new URL(req.url, 'http://x').pathname;
+    } catch {
+      return sendJson(res, 400, { error: 'bad_request' });
+    }
     try {
       return await admin(req, res, path);
     } catch (e) {

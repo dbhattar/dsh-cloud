@@ -9,6 +9,7 @@ services:
     entrypoint: ["true"] # build only; real sandboxes are created by sandbox-runner
     restart: "no"
   gateway:
+    restart: unless-stopped # a crash or a reboot must not leave the site down (docs/security-review.md, SEC-03)
     build: ../gateway
     depends_on:
       sandbox-image:
@@ -21,6 +22,12 @@ services:
         condition: service_healthy
     labels:
       dsh-cloud.role: gateway # sandbox-runner attaches it to every user network
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/gw/healthz').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
     environment:
       PUBLIC_URL: https://localhost/
       RUNNER_URL: http://sandbox-runner:8090
@@ -72,6 +79,7 @@ services:
   # The only holder of the Docker socket. Builds every sandbox container spec itself from a user id
   # and token; reachable only by services on the compose network (never by sandboxes).
   sandbox-runner:
+    restart: unless-stopped # a crash or a reboot must not leave the site down (docs/security-review.md, SEC-03)
     build: ../runner
     depends_on:
       sandbox-image:
@@ -98,6 +106,7 @@ services:
   # with per-user tokens; the admin API is a unix socket on the llm-admin volume, shared only with the
   # gateway (and still needs LLM_ADMIN_SECRET).
   llm-proxy:
+    restart: unless-stopped # a crash or a reboot must not leave the site down (docs/security-review.md, SEC-03)
     build: ../llm-proxy
     labels:
       dsh-cloud.role: llm-proxy # sandbox-runner attaches it to every user network
@@ -121,6 +130,7 @@ services:
   # The only path out of a user network. On the compose network (which has internet) and, via the runner,
   # on every user network. Refuses private, loopback, link-local and metadata destinations; logs every request.
   egress-proxy:
+    restart: unless-stopped # a crash or a reboot must not leave the site down (docs/security-review.md, SEC-03)
     build: ../egress-proxy
     labels:
       dsh-cloud.role: egress-proxy # sandbox-runner attaches it to every user network
@@ -139,6 +149,7 @@ services:
     expose:
       - "3128"
   proxy:
+    restart: unless-stopped # a crash or a reboot must not leave the site down (docs/security-review.md, SEC-03)
     image: caddy:2.11.9@sha256:4851e54a46b206517c574821bb5cc67f170d2156041e9fbc4c9193b45e84a75b
     ports:
       - "443:443"
