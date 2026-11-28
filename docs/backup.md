@@ -10,7 +10,7 @@ Phase 4, task E2. Two scripts: `scripts/backup.sh` takes the backup and proves i
 | --- | --- | --- |
 | Accounts, sessions, invites, feedback, audit trail | SQLite `gateway.db` in volume `dshcloud_gateway-data` | consistent online copy with SQLite's backup API (safe while the gateway writes) |
 | Proxy tokens (hashed) and usage counters | SQLite `llm-proxy.db` in `dshcloud_llm-proxy-data` | same |
-| Every user's `$DSH_HOME` and workspace | volumes `dsh-data-<id>` and `dsh-ws-<id>` | `tar.gz` per volume |
+| Every user's `$DSH_HOME` and workspace | volumes `dsh-data-<id>-<key>` and `dsh-ws-<id>-<key>` (`dsh-data-<id>` and `dsh-ws-<id>` for accounts that predate keys) | `tar.gz` per volume |
 | TLS certificates and ACME account | `dshcloud_caddy-data` | `tar.gz` |
 
 Not backed up, on purpose: `.env` (it holds secrets; keep it in your secret store), container images, the `llm-admin` socket volume, and the sandboxes themselves (they are recreated from the image and the volumes).

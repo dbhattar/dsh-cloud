@@ -129,7 +129,7 @@ test('sandbox lifecycle is audited: token issue, create, start, stop (and by who
   const srv = http.createServer((req, res) => res.writeHead(303, { 'set-cookie': 'dsh-auth-x=v1.tok; Path=/' }).end());
   await new Promise((r) => srv.listen(0, '127.0.0.1', r));
   try {
-    const { store, audit, cfg } = setup({ MAX_RUNNING_SANDBOXES: '1', MAX_RUN_SECONDS: '3600', WAIT_QUEUE_SECONDS: '0' });
+    const { store, audit, cfg } = setup({ MAX_RUNNING_SANDBOXES: '1', MAX_RUN_SECONDS: '3600', WAIT_QUEUE_SECONDS: '0', MAX_DISK_MB: '0' });
     const runner = fakeRunner();
     const llm = { issueToken: async () => 'dshu_secret_token_value' };
     const m = new SandboxManager({ runner, cfg: { ...cfg, sandboxPort: srv.address().port }, log: () => {}, llm, audit });

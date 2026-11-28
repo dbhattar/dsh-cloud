@@ -7,7 +7,7 @@ import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { assertNoDevData, compose, request, ROOT, sh, signupUser, waitFor, waitSandboxUp } from '../lib/helpers.mjs';
+import { assertNoDevData, compose, removeUserVolumes, request, ROOT, sh, signupUser, userVolumes, waitFor, waitSandboxUp } from '../lib/helpers.mjs';
 
 const FILE = 'docker-compose.gateway.yml';
 const run = randomBytes(3).toString('hex');
@@ -43,7 +43,7 @@ after(() => {
   if (!owned) return;
   for (const u of Object.values(users)) {
     tryDocker('rm', '-f', u.container);
-    tryDocker('volume', 'rm', `dsh-data-${u.id}`, `dsh-ws-${u.id}`);
+    removeUserVolumes(u.id);
     tryDocker('network', 'rm', `dsh-net-${u.id}`);
   }
   compose(FILE, ['down', '-v'], ENV);
@@ -55,7 +55,7 @@ test('backup.sh writes both databases, every user volume and a manifest, and its
   assert.equal(r.status, 0, r.stdout + r.stderr);
   assert.match(r.stdout, /Restore check passed/);
   backupDir = r.stdout.match(/Backup complete: (.+)/)[1].trim();
-  for (const f of ['gateway.db', 'llm-proxy.db', 'MANIFEST', `volumes/dsh-data-${users.a.id}.tar.gz`, `volumes/dsh-ws-${users.a.id}.tar.gz`]) assert.ok(existsSync(join(backupDir, f)), f);
+  for (const f of ['gateway.db', 'llm-proxy.db', 'MANIFEST', ...userVolumes(users.a.id).map((v) => `volumes/${v}.tar.gz`)]) assert.ok(existsSync(join(backupDir, f)), f);
   const manifest = readFileSync(join(backupDir, 'MANIFEST'), 'utf8');
   assert.match(manifest, new RegExp(`counts\\.gateway=\\{"integrity":"ok","tables":\\{.*"users":[1-9]`));
   assert.match(manifest, /^owner\.llm-proxy=1000:1000$/m, 'who owns the data is recorded, so a restore into a new volume can give it back');
@@ -73,7 +73,7 @@ test('a damaged or incomplete backup fails the restore check', () => {
   assert.notEqual(script('restore.sh', '--check', bad).status, 0, 'a flipped byte');
   const missing = join(outDir, 'missing');
   cpSync(backupDir, missing, { recursive: true });
-  rmSync(join(missing, 'volumes', `dsh-ws-${users.a.id}.tar.gz`));
+  rmSync(join(missing, 'volumes', `${userVolumes(users.a.id).find((n) => n.startsWith('dsh-ws-'))}.tar.gz`));
   assert.notEqual(script('restore.sh', '--check', missing).status, 0, 'a missing archive');
   assert.equal(tryDocker('volume', 'ls', '-q', '--filter', 'name=dsh-restorecheck-'), '', 'scratch volumes are removed even on failure');
 });

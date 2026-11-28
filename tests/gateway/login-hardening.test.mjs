@@ -55,16 +55,15 @@ test('async hashes and checks are the same format as the synchronous ones, so ex
 
 test('while passwords are being checked the gateway keeps answering: the event loop is not blocked', async () => {
   const stored = hashPassword(PW);
-  const t0 = process.hrtime.bigint();
-  verifyPassword(PW, stored);
-  const oneMs = Number(process.hrtime.bigint() - t0) / 1e6; // what one check used to freeze the thread for
-  let last = performance.now();
-  let maxGap = 0;
-  const ticker = setInterval(() => { const n = performance.now(); maxGap = Math.max(maxGap, n - last); last = n; }, 2);
+  // Count how many turns the event loop gets while 8 checks are in flight. Done on a thread pool, hundreds; done synchronously on the main thread,
+  // all eight finish inside one turn and the count is about zero. (A count, not a timing, so a busy machine does not make it flaky.)
+  let turns = 0;
+  let running = true;
+  const spin = (async () => { while (running) { await new Promise((r) => setImmediate(r)); turns++; } })();
   await Promise.all(Array.from({ length: 8 }, () => verifyPasswordAsync('wrong-password-1', stored, new Gate(8, 8))));
-  maxGap = Math.max(maxGap, performance.now() - last); // a loop that never got a turn has not ticked at all: count the time up to now
-  clearInterval(ticker);
-  assert.ok(maxGap < oneMs / 2, `the loop stalled for ${maxGap.toFixed(1)} ms; one synchronous check takes ${oneMs.toFixed(1)} ms`);
+  running = false;
+  await spin;
+  assert.ok(turns >= 20, `the event loop got ${turns} turns while 8 password checks ran`);
 });
 
 test('a full hashing queue is a 503 with Retry-After, before anything is spent; a reset link is not used up by it', async () => {

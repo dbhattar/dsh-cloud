@@ -3,7 +3,7 @@
 import test, { before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
-import { BASE, assertNoDevData, compose, cookieOf, request, sh, sleep, waitFor, wsHandshake } from '../lib/helpers.mjs';
+import { assertNoDevData, BASE, compose, cookieOf, removeUserVolumes, request, sh, sleep, userVolumes, waitFor, wsHandshake } from '../lib/helpers.mjs';
 
 const FILE = 'docker-compose.gateway.yml';
 // The stack needs a key and an admin secret to start llm-proxy; phase 2 never calls a model.
@@ -56,7 +56,7 @@ after(() => {
   for (const u of Object.values(users)) {
     try {
       docker('rm', '-f', u.container);
-      docker('volume', 'rm', `dsh-data-${u.id}`, `dsh-ws-${u.id}`);
+      removeUserVolumes(u.id);
       docker('network', 'rm', `dsh-net-${u.id}`);
     } catch {}
   }
@@ -114,7 +114,8 @@ test('two users get separate containers and volumes', async () => {
   const mounts = (c) => docker('inspect', '-f', '{{range .Mounts}}{{.Name}} {{end}}', c).split(' ').filter(Boolean).sort();
   const ma = mounts(users.a.container);
   const mb = mounts(users.b.container);
-  assert.deepEqual(ma, [`dsh-data-${users.a.id}`, `dsh-ws-${users.a.id}`].sort());
+  assert.deepEqual(ma, userVolumes(users.a.id).sort(), 'exactly the account\'s own two volumes (their names carry its key)');
+  assert.equal(ma.length, 2);
   assert.ok(ma.every((m) => !mb.includes(m)), 'no shared volume');
 });
 

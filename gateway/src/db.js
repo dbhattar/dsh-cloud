@@ -79,6 +79,7 @@ export class Store {
     const feedbackColumns = this.db.prepare('PRAGMA table_info(feedback)').all().map((c) => c.name);
     if (!feedbackColumns.includes('read_at')) this.db.exec('ALTER TABLE feedback ADD COLUMN read_at INTEGER');
     if (!columns.includes('suspended_at')) this.db.exec('ALTER TABLE users ADD COLUMN suspended_at INTEGER');
+    if (!columns.includes('vol_key')) this.db.exec('ALTER TABLE users ADD COLUMN vol_key TEXT'); // NULL: an account that predates volume keys keeps the old volume names
     if (!columns.includes('mail_notices')) this.db.exec('ALTER TABLE users ADD COLUMN mail_notices INTEGER NOT NULL DEFAULT 1');
   }
   addAudit({ ts = Date.now(), event, userId = null, ip = null, detail = {} }) {
@@ -221,10 +222,15 @@ export class Store {
     return 'revoked';
   }
   createUser(email, pwHash) {
+    // The volume key makes this account's volume names unique even if user ids are ever reused (SEC-09). Random, made once, never shown.
     const r = this.db
-      .prepare('INSERT INTO users (email, pw_hash, created_at) VALUES (?, ?, ?)')
-      .run(email, pwHash, Date.now());
+      .prepare('INSERT INTO users (email, pw_hash, created_at, vol_key) VALUES (?, ?, ?, ?)')
+      .run(email, pwHash, Date.now(), randomBytes(8).toString('hex'));
     return Number(r.lastInsertRowid);
+  }
+  /** The account's volume key, or '' for one that predates keys (its volumes keep the old names). */
+  volumeKey(userId) {
+    return this.db.prepare('SELECT vol_key FROM users WHERE id = ?').get(userId)?.vol_key ?? '';
   }
   userByEmail(email) {
     return this.db.prepare('SELECT * FROM users WHERE email = ?').get(email);

@@ -34,6 +34,10 @@ export class Docker {
     }
     return r.buf.length ? JSON.parse(r.buf.toString()) : null;
   }
+  /** Names of the OCI runtimes the daemon has registered (runc, runsc, ...). */
+  async runtimes() {
+    return Object.keys((await this.#json('GET', '/info', undefined, [200]))?.Runtimes ?? {});
+  }
   async inspect(name) {
     const r = await this.request('GET', `/containers/${encodeURIComponent(name)}/json`);
     if (r.status === 404) return null;

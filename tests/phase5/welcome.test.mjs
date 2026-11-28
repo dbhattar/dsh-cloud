@@ -5,7 +5,7 @@
 import test, { before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
-import { assertNoDevData, compose, request, sh, signupUser, waitFor, waitSandboxUp } from '../lib/helpers.mjs';
+import { assertNoDevData, compose, removeUserVolumes, request, sh, signupUser, waitFor, waitSandboxUp } from '../lib/helpers.mjs';
 import { allText, loadBrowser, signIn, waitForText } from '../ui/browser.mjs';
 
 const FILE = 'docker-compose.gateway.yml';
@@ -43,7 +43,7 @@ after(async () => {
   if (!owned) return;
   for (const u of Object.values(users)) {
     tryDocker('rm', '-f', u.container);
-    tryDocker('volume', 'rm', `dsh-data-${u.id}`, `dsh-ws-${u.id}`);
+    removeUserVolumes(u.id);
     tryDocker('network', 'rm', `dsh-net-${u.id}`);
   }
   compose(FILE, ['down', '-v'], ENV);

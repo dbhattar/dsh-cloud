@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { assertNoDevData, compose, request, sh, signupUser, waitFor, waitSandboxUp } from '../lib/helpers.mjs';
+import { assertNoDevData, compose, removeUserVolumes, request, sh, signupUser, userVolumes, waitFor, waitSandboxUp } from '../lib/helpers.mjs';
 
 const FILE = 'docker-compose.gateway.yml';
 const run = randomBytes(3).toString('hex');
@@ -75,7 +75,7 @@ after(() => {
   for (const u of Object.values(users)) {
     try {
       docker('rm', '-f', u.container);
-      docker('volume', 'rm', `dsh-data-${u.id}`, `dsh-ws-${u.id}`);
+      removeUserVolumes(u.id);
       docker('network', 'rm', `dsh-net-${u.id}`);
     } catch {}
   }
@@ -251,7 +251,7 @@ test('the gateway recreates a pre-proxy sandbox that could hold the real key', a
   docker('rm', '-f', a.container);
   docker('create', '--name', a.container, '--label', `dsh-cloud.user=${a.id}`, '--network', `dsh-net-${a.id}`,
     '-e', `OPENROUTER_API_KEY=${REAL_KEY}`, '-e', 'DSH_PUBLIC_URL=https://localhost/', '-e', 'DSH_TRUSTED_HOST=localhost',
-    '-v', `dsh-data-${a.id}:/data/dsh`, '-v', `dsh-ws-${a.id}:/workspace`, 'dsh-sandbox:latest');
+    '-v', `${userVolumes(a.id).find((n) => n.startsWith('dsh-data-'))}:/data/dsh`, '-v', `${userVolumes(a.id).find((n) => n.startsWith('dsh-ws-'))}:/workspace`, 'dsh-sandbox:latest');
   assert.ok(docker('inspect', a.container).includes(REAL_KEY), 'control: the legacy container exposes the key');
   await waitSandboxUp(a);
   assert.ok(!docker('inspect', a.container).includes(REAL_KEY), 'replacement has no real key');

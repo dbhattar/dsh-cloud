@@ -22,7 +22,7 @@ const store = new Store(join(cfg.dataDir, 'gateway.db'));
 const llm = cfg.llmAdminSocket ? new LlmProxyClient({ socketPath: cfg.llmAdminSocket, adminSecret: cfg.llmAdminSecret }) : null;
 if (!llm) log('LLM_ADMIN_SOCKET is not set: sandboxes get no model access');
 const audit = new Audit({ store, log });
-const manager = new SandboxManager({ runner: new RunnerClient({ url: cfg.runnerUrl, secret: cfg.runnerSecret }), cfg, log, llm, audit });
+const manager = new SandboxManager({ runner: new RunnerClient({ url: cfg.runnerUrl, secret: cfg.runnerSecret }), cfg, log, llm, audit, volumeKeyOf: (id) => store.volumeKey(id) });
 
 manager.startReaper();
 setInterval(() => {

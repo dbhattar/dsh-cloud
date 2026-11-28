@@ -8,6 +8,22 @@ import { networkName } from './network.js';
 
 export const containerName = (userId) => `dsh-sbx-${userId}`;
 
+/** Container label holding the account's volume key (absent for accounts that predate keys). */
+export const VOLUME_KEY_LABEL = 'dsh-cloud.vkey';
+/** 16 lower-case hex characters, made by the gateway when the account is created. */
+export const VOLUME_KEY = /^[0-9a-f]{16}$/;
+
+/**
+ * The two volume names of an account. The user id alone is not a safe name: ids start at 1 again on a new or older database, and
+ * `dsh-ws-1` would then hold the previous owner of id 1's files and credentials for whoever is user 1 now (docs/security-review.md,
+ * SEC-09). A key made when the account was created, and stored only in the gateway's database, is part of the name. Accounts that
+ * predate keys keep the old names (`volumeKey` empty).
+ */
+export const volumeNames = (userId, volumeKey = '') => {
+  const suffix = volumeKey ? `${userId}-${volumeKey}` : String(userId);
+  return { data: `dsh-data-${suffix}`, ws: `dsh-ws-${suffix}` };
+};
+
 /**
  * Web access goes through the egress proxy only. NODE_USE_ENV_PROXY makes Node's own fetch/http honour the
  * variables; the internal services are listed in NO_PROXY so model traffic never detours through the proxy.
@@ -28,7 +44,8 @@ function proxyEnv(cfg) {
  * and nothing else, so no caller can add binds, capabilities, devices or privileged mode. `hosts` is
  * { name: address } computed by the runner for the shared services (see Networks).
  */
-export function buildSpec(cfg, userId, llmToken, hosts = {}) {
+export function buildSpec(cfg, userId, llmToken, hosts = {}, volumeKey = '') {
+  const vol = volumeNames(userId, volumeKey);
   return {
     Image: cfg.sandboxImage,
     Env: [
@@ -41,9 +58,9 @@ export function buildSpec(cfg, userId, llmToken, hosts = {}) {
       `DSH_SHOW_SIGN_IN=${cfg.showHarnessSignIn}`,
       ...proxyEnv(cfg),
     ],
-    Labels: { [LABEL]: String(userId), ...(llmToken ? { [LLM_LABEL]: LLM_LABEL_VALUE } : {}) },
+    Labels: { [LABEL]: String(userId), ...(llmToken ? { [LLM_LABEL]: LLM_LABEL_VALUE } : {}), ...(volumeKey ? { [VOLUME_KEY_LABEL]: volumeKey } : {}) },
     HostConfig: {
-      Binds: [`dsh-data-${userId}:/data/dsh`, `dsh-ws-${userId}:/workspace`],
+      Binds: [`${vol.data}:/data/dsh`, `${vol.ws}:/workspace`],
       NetworkMode: networkName(userId),
       // Names of the shared services, from /etc/hosts: gVisor sandboxes cannot use Docker's embedded DNS.
       ExtraHosts: Object.entries(hosts).map(([name, ip]) => `${name}:${ip}`),
@@ -62,6 +79,8 @@ export function buildSpec(cfg, userId, llmToken, hosts = {}) {
       SecurityOpt: ['no-new-privileges'],
       ...(cfg.sandboxRuntime ? { Runtime: cfg.sandboxRuntime } : {}),
       RestartPolicy: { Name: 'no' },
+      // Bounded and rotated: the daemon's default keeps every byte a container prints, on the host's disk, outside every volume quota.
+      LogConfig: { Type: 'local', Config: { 'max-size': cfg.sandboxLogMaxSize, 'max-file': String(cfg.sandboxLogMaxFiles) } },
     },
   };
 }

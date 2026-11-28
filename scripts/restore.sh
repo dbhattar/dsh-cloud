@@ -119,6 +119,13 @@ echo "==> restoring volumes"
 for f in "$DIR"/volumes/*.tar.gz; do
   [ -f "$f" ] || continue
   name="$(basename "$f" .tar.gz)"
+  # The archive's file name becomes a Docker volume name that is WIPED and refilled: only the names a backup holds (account volumes, with or
+  # without their key, and Caddy's) are accepted, so a backup from elsewhere cannot overwrite any other volume (docs/security-review.md, SEC-13).
+  case "$name" in
+    dsh-data-[0-9]*|dsh-ws-[0-9]*) echo "$name" | grep -Eq '^dsh-(data|ws)-[0-9]+(-[0-9a-f]{16})?$' || { echo "refusing volume archive with an unexpected name: $name" >&2; exit 1; } ;;
+    *_caddy-data) ;;
+    *) echo "refusing volume archive with an unexpected name: $name" >&2; exit 1 ;;
+  esac
   docker volume create "$name" >/dev/null
   docker run --rm -i -v "$name:/v" "$IMG" sh -c 'find /v -mindepth 1 -delete; tar xzf - -C /v' < "$f"
   echo "   $name"

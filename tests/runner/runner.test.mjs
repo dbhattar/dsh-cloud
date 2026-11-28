@@ -1,7 +1,7 @@
 // sandbox-runner: container spec, narrow API, auth and input validation (fake Docker, no daemon needed).
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { loadConfig } from '../../runner/src/config.js';
+import { loadConfig, runtimeWarning } from '../../runner/src/config.js';
 import { buildSpec } from '../../runner/src/spec.js';
 import { createRunner } from '../../runner/src/server.js';
 import { Networks, pinnedAddress } from '../../runner/src/network.js';
@@ -40,17 +40,49 @@ test('spec hardening: read-only rootfs, tmpfs /tmp, no swap, nofile cap, default
   assert.ok(!h.Ulimits.some((u) => u.Name === 'nproc'), 'nproc is per host UID, shared by all sandboxes');
   assert.ok(!h.SecurityOpt.some((o) => /seccomp|apparmor/.test(o)), 'keep Docker default profiles');
   for (const k of ['Privileged', 'CapAdd', 'Devices', 'PidMode', 'IpcMode', 'UsernsMode', 'CgroupnsMode']) assert.equal(h[k], undefined, k);
-  assert.equal(h.Runtime, 'runc');
+  assert.equal(h.Runtime, 'runsc', 'gVisor unless the operator says otherwise');
   // Only the two per-user volumes are mounted.
   assert.equal(h.Binds.length, 2);
 });
 
-test('runtime is configurable (runsc in production), validated, and may be left to the daemon default', () => {
+test('runtime: gVisor by default; runc, empty (the daemon default) or an unknown value need ALLOW_INSECURE_RUNTIME in words (SEC-05)', () => {
+  assert.equal(cfgOf().sandboxRuntime, 'runsc', 'the default is gVisor');
   assert.equal(buildSpec(cfgOf({ SANDBOX_RUNTIME: 'runsc' }), 1).HostConfig.Runtime, 'runsc');
-  assert.equal(buildSpec(cfgOf({ SANDBOX_RUNTIME: '' }), 1).HostConfig.Runtime, undefined);
+  for (const insecure of ['runc', '']) {
+    assert.throws(() => cfgOf({ SANDBOX_RUNTIME: insecure }), /refusing to start.*host kernel/, JSON.stringify(insecure));
+    assert.throws(() => cfgOf({ SANDBOX_RUNTIME: insecure, ALLOW_INSECURE_RUNTIME: 'yes' }), /refusing to start/, 'only the word true counts');
+  }
+  const dev = cfgOf({ SANDBOX_RUNTIME: 'runc', ALLOW_INSECURE_RUNTIME: 'true' });
+  assert.equal(buildSpec(dev, 1).HostConfig.Runtime, 'runc');
+  assert.match(runtimeWarning(dev), /INSECURE/);
+  assert.equal(runtimeWarning(cfgOf()), null);
+  assert.equal(buildSpec(cfgOf({ SANDBOX_RUNTIME: '', ALLOW_INSECURE_RUNTIME: 'true' }), 1).HostConfig.Runtime, undefined);
   for (const bad of ['runsc --privileged', '../x', 'RUNC', 'a'.repeat(40)]) {
     assert.throws(() => cfgOf({ SANDBOX_RUNTIME: bad }), /SANDBOX_RUNTIME/, bad);
   }
+});
+
+test('the sandbox log is bounded and rotated, and the bound is validated (SEC-07)', () => {
+  const { HostConfig: h } = buildSpec(cfgOf(), 1);
+  assert.deepEqual(h.LogConfig, { Type: 'local', Config: { 'max-size': '10m', 'max-file': '3' } });
+  assert.deepEqual(buildSpec(cfgOf({ SANDBOX_LOG_MAX_SIZE: '500k', SANDBOX_LOG_MAX_FILES: '2' }), 1).HostConfig.LogConfig.Config, { 'max-size': '500k', 'max-file': '2' });
+  for (const bad of ['0m', '10', 'ten', '10m; rm', '-1m', '9999999m']) assert.throws(() => cfgOf({ SANDBOX_LOG_MAX_SIZE: bad }), /SANDBOX_LOG_MAX_SIZE/, bad);
+});
+
+test('a daemon that creates a sandbox under another runtime than asked for is refused, and the container is removed', async () => {
+  const docker = fakeDocker();
+  const realInspect = docker.inspect;
+  docker.inspect = async (name) => { const i = await realInspect(name); return i ? { ...i, HostConfig: { Runtime: 'runc' } } : i; }; // the daemon substituted runc
+  const removed = [];
+  docker.remove = async (n) => { removed.push(n); docker.state.exists = false; };
+  const server = createRunner({ cfg: cfgOf(), docker, log: () => {} });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  try {
+    const r = await fetch(`http://127.0.0.1:${server.address().port}/v1/sandboxes/1`, { method: 'POST', headers: { authorization: `Bearer ${SECRET}` } });
+    assert.equal(r.status, 500);
+    assert.match((await r.json()).error, /runtime mismatch/);
+    assert.deepEqual(removed, ['dsh-sbx-1']);
+  } finally { server.closeAllConnections(); server.close(); }
 });
 
 test('spec with a proxy token: token + proxy URL, labelled, still no provider key', () => {
@@ -77,7 +109,7 @@ function fakeDocker() {
     created,
     state,
     async inspect(name) {
-      return state.exists ? { Name: name, State: { Running: state.running, StartedAt: 't1', ExitCode: state.exitCode ?? 0, OOMKilled: Boolean(state.oomKilled) }, Config: { Labels: created.at(-1)?.spec.Labels } } : null;
+      return state.exists ? { Name: name, State: { Running: state.running, StartedAt: 't1', ExitCode: state.exitCode ?? 0, OOMKilled: Boolean(state.oomKilled) }, Config: { Labels: created.at(-1)?.spec.Labels }, HostConfig: { Runtime: created.at(-1)?.spec.HostConfig.Runtime } } : null;
     },
     async create(name, spec) {
       created.push({ name, spec });
@@ -158,7 +190,7 @@ test('lifecycle through the client: create, start, info, logs, list, stop, remov
     assert.equal(docker.created[0].name, 'dsh-sbx-1');
     assert.ok(docker.created[0].spec.Env.includes('LLM_PROXY_TOKEN=dshu_abc'));
     await client.start(1);
-    assert.deepEqual(await client.info(1), { running: true, startedAt: 't1', llmManaged: true, exitCode: null, oomKilled: false });
+    assert.deepEqual(await client.info(1), { running: true, startedAt: 't1', llmManaged: true, volumeKey: '', exitCode: null, oomKilled: false });
     assert.match(await client.logs(1), /token=abc/);
     assert.deepEqual(await client.list(), [{ userId: 1, running: true }]);
     await client.stop(1);
@@ -175,7 +207,7 @@ test('info says why a stopped sandbox is not running (exit code, out of memory),
     docker.state.running = false;
     docker.state.exitCode = 137;
     docker.state.oomKilled = true;
-    assert.deepEqual(await client.info(1), { running: false, startedAt: 't1', llmManaged: true, exitCode: 137, oomKilled: true });
+    assert.deepEqual(await client.info(1), { running: false, startedAt: 't1', llmManaged: true, volumeKey: '', exitCode: 137, oomKilled: true });
   });
 });
 
@@ -440,7 +472,7 @@ test('GET /v1/usage: bytes per user over both volumes; ignores other volumes and
     assert.equal((await fetch(url)).status, 401);
     const r = await fetch(url, { headers: { authorization: `Bearer ${SECRET}` } });
     assert.equal(r.status, 200);
-    assert.deepEqual((await r.json()).sort((a, b) => a.userId - b.userId), [{ userId: 1, bytes: 500 }, { userId: 2, bytes: 7 }]);
+    assert.deepEqual((await r.json()).sort((a, b) => a.userId - b.userId), [{ userId: 1, key: '', bytes: 500 }, { userId: 2, key: '', bytes: 7 }]);
     assert.equal((await fetch(url, { method: 'POST', headers: { authorization: `Bearer ${SECRET}` } })).status, 405);
   } finally {
     server.close();
@@ -476,10 +508,9 @@ test('RunnerClient.activity returns the sample and fails with the status on an e
   await assert.rejects(c.activity(9), /404/);
 });
 
-test('runtime warning: plain runc (or the daemon default) warns that the shell tool will not work; gVisor and others do not', async () => {
-  const { runtimeWarning } = await import('../../runner/src/config.js');
-  for (const rt of ['runc', '']) assert.match(runtimeWarning(cfgOf({ SANDBOX_RUNTIME: rt })), /runc.*shell tool will not work.*SANDBOX_RUNTIME=runsc/s, JSON.stringify(rt));
-  assert.equal(runtimeWarning(cfgOf({})) !== null, true, 'the default is runc, so it warns');
+test('runtime warning: allowed plain runc (or the daemon default) says INSECURE and that the shell tool will not work; gVisor and others do not', async () => {
+  for (const rt of ['runc', '']) assert.match(runtimeWarning(cfgOf({ SANDBOX_RUNTIME: rt, ALLOW_INSECURE_RUNTIME: 'true' })), /INSECURE.*runc.*shell tool will not work.*SANDBOX_RUNTIME=runsc/s, JSON.stringify(rt));
+  assert.equal(runtimeWarning(cfgOf({})), null, 'the default is gVisor: no warning');
   for (const rt of ['runsc', 'kata']) assert.equal(runtimeWarning(cfgOf({ SANDBOX_RUNTIME: rt })), null, rt);
 });
 
